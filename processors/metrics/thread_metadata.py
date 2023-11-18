@@ -5,9 +5,7 @@ import datetime
 import math
 import time
 
-from backend.abstract.processor import BasicProcessor
-
-import config
+from backend.lib.processor import BasicProcessor
 
 __author__ = "Sal Hagen"
 __credits__ = ["Sal Hagen"]
@@ -16,18 +14,13 @@ __email__ = "4cat@oilab.eu"
 
 class ThreadMetadata(BasicProcessor):
 	"""
-	Example post-processor
-
-	This is a very simple example post-processor.
-
-	The four configuration options should be set for all post-processors. They
-	contain information needed internally as well as information that is used
-	to describe this post-processor with in a user interface.
+	Extracts metadata on threads from the dataset.
 	"""
 	type = "thread-metadata"  # job type ID
 	category = "Post metrics"  # category
 	title = "Thread metadata"  # title displayed in UI
-	description = "Create an overview of the threads present in the dataset, containing thread IDs, subjects and post counts."  # description displayed in UI
+	description = "Extract various metadata on the threads in the dataset, including time data and post counts. Note " \
+				  "that this extracted only on the basis of the items present this dataset."  # description displayed in UI
 	extension = "csv"  # extension of result file, used internally and in UI
 
 	def process(self):
@@ -39,10 +32,10 @@ class ThreadMetadata(BasicProcessor):
 		threads = {}
 
 		self.dataset.update_status("Reading source file")
-		for post in self.iterate_items(self.source_file):
+		for post in self.source_dataset.iterate_items(self):
 			if post["thread_id"] not in threads:
 				threads[post["thread_id"]] = {
-					"subject": post["subject"],
+					"subject": post.get("subject", ""),
 					"first_post": int(time.time()),
 					"image_md5": "",  # only relevant for the chans
 					"country_name": "",  # only relevant for the chans
@@ -53,17 +46,17 @@ class ThreadMetadata(BasicProcessor):
 					"count": 0,
 				}
 
-			if post["subject"]:
-				threads[post["thread_id"]]["subject"] = post["subject"]
+			if post.get("subject"):
+				threads[post["thread_id"]]["subject"] = post.get("subject", "")
 
 			if post.get("image_md5"):
 				threads[post["thread_id"]]["images"] += 1
 
 			if post["id"] == post["thread_id"]:
-				threads[post["thread_id"]]["author"] = post["author"]
+				threads[post["thread_id"]]["author"] = post.get("author", "")
 				threads[post["thread_id"]]["country_name"] = post.get("country_name", "N/A")
 				threads[post["thread_id"]]["image_md5"] = post.get("image_md5", "N/A")
-				threads[post["thread_id"]]["op_body"] = post["body"]
+				threads[post["thread_id"]]["op_body"] = post.get("body", "")
 
 			timestamp = int(datetime.datetime.strptime(post["timestamp"], "%Y-%m-%d %H:%M:%S").timestamp())
 
@@ -90,7 +83,7 @@ class ThreadMetadata(BasicProcessor):
 					"num_images": threads[thread_id]["images"],
 					"image_md5": threads[thread_id]["image_md5"],
 					"country_code": threads[thread_id]["country_code"],
-				} if self.source_dataset.type in ("4chan", "8chan", "8kun") else {}
+				} if self.source_dataset.type in ("fourchan", "eightchan", "eightkun") else {}
 			)
 		} for thread_id in threads]
 

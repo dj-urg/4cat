@@ -4,13 +4,12 @@ Import scraped Instagram data
 It's prohibitively difficult to scrape data from Instagram within 4CAT itself
 due to its aggressive rate limiting. Instead, import data collected elsewhere.
 """
-from pathlib import Path
-import json
+import datetime
 import re
 
-from backend.abstract.search import Search
+from backend.lib.search import Search
 from common.lib.helpers import UserInput
-from common.lib.exceptions import WorkerInterruptedException
+from common.lib.exceptions import WorkerInterruptedException, MapItemException
 
 
 class SearchInstagram(Search):
@@ -21,10 +20,15 @@ class SearchInstagram(Search):
     category = "Search"  # category
     title = "Import scraped Instagram data"  # title displayed in UI
     description = "Import Instagram data collected with an external tool such as Zeeschuimer."  # description displayed in UI
-    extension = "csv"  # extension of result file, used internally and in UI
+    extension = "ndjson"  # extension of result file, used internally and in UI
+    is_from_extension = True
 
     # not available as a processor for existing datasets
     accepts = [None]
+    references = [
+        "[Zeeschuimer browser extension](https://github.com/digitalmethodsinitiative/zeeschuimer)",
+        "[Worksheet: Capturing TikTok data with Zeeschuimer and 4CAT](https://tinyurl.com/nmrw-zeeschuimer-tiktok) (also covers usage with Instagram)"
+    ]
 
     # some magic numbers instagram uses
     MEDIA_TYPE_PHOTO = 1
@@ -39,16 +43,11 @@ class SearchInstagram(Search):
         """
         raise NotImplementedError("Instagram datasets can only be created by importing data from elsewhere")
 
-    def import_from_file(self, path):
+
+    @staticmethod
+    def map_item(item):
         """
-        Import items from an external file
-
-        By default, this reads a file and parses each line as JSON, returning
-        the parsed object as an item. This works for NDJSON files. Data sources
-        that require importing from other or multiple file types can overwrite
-        this method.
-
-        The file is considered disposable and deleted after importing.
+        Map Instagram item
 
         Instagram importing is a little bit roundabout since we can expect
         input in two separate and not completely overlapping formats - an "edge
@@ -56,30 +55,24 @@ class SearchInstagram(Search):
         those, and do not contain the same data. So we find a middle ground
         here... each format has its own handler function
 
-        :param str path:  Path to read from
-        :return:  Yields all items in the file, item for item.
+        :param dict item:  Item to map
+        :return:  Mapped item
         """
-        path = Path(path)
-        if not path.exists():
-            return []
+        link = item.get("link", "")
+        if (item.get("product_type", "") == "ad") or \
+                (link and link.startswith("https://www.facebook.com/ads/ig_redirect")):
+            # These are ads
+            raise MapItemException("appears to be Instagram ad, check raw data to confirm and ensure ZeeSchuimer is up to date.")
 
-        with path.open() as infile:
-            for line in infile:
-                if self.interrupted:
-                    raise WorkerInterruptedException()
+        is_graph_response = "__typename" in item and item["__typename"] not in ("XDTMediaDict",)
 
-                post = json.loads(line)
-                node = post["data"]
-                is_graph_response = "__typename" in node
+        if is_graph_response:
+            return SearchInstagram.parse_graph_item(item)
+        else:
+            return SearchInstagram.parse_itemlist_item(item)
 
-                if is_graph_response:
-                    yield self.parse_graph_item(node)
-                else:
-                    yield self.parse_itemlist_item(node)
-
-        path.unlink()
-
-    def parse_graph_item(self, node):
+    @staticmethod
+    def parse_graph_item(node):
         """
         Parse Instagram post in Graph format
 
@@ -104,7 +97,6 @@ class SearchInstagram(Search):
         if media_node["__typename"] == "GraphVideo":
             media_url = media_node["video_url"]
         elif media_node["__typename"] == "GraphImage":
-            print(json.dumps(media_node))
             resources = media_node.get("display_resources", media_node.get("thumbnail_resources"))
             try:
                 media_url = resources.pop()["src"]
@@ -121,15 +113,24 @@ class SearchInstagram(Search):
             media_types = set([s["node"]["__typename"] for s in node["edge_sidecar_to_children"]["edges"]])
             media_type = "mixed" if len(media_types) > 1 else type_map.get(media_types.pop(), "unknown")
 
+        location = {"name": "", "latlong": "", "city": ""}
+        # location has 'id', 'has_public_page', 'name', and 'slug' keys in tested examples; no lat long or "city" though name seems
+        if node.get("location"):
+            location["name"] = node["location"].get("name")
+            # Leaving this though it does not appear to be used in this type; maybe we'll be surprised in the future...
+            location["latlong"] = str(node["location"]["lat"]) + "," + str(node["location"]["lng"]) if node[
+                "location"].get("lat") else ""
+            location["city"] = node["location"].get("city")
+
         mapped_item = {
             "id": node["shortcode"],
             "thread_id": node["shortcode"],
             "parent_id": node["shortcode"],
             "body": caption,
             "author": node["owner"]["username"],
+            "timestamp": datetime.datetime.fromtimestamp(node["taken_at_timestamp"]).strftime("%Y-%m-%d %H:%M:%S"),
             "author_fullname": node["owner"].get("full_name", ""),
             "author_avatar_url": node["owner"].get("profile_pic_url", ""),
-            "timestamp": node["taken_at_timestamp"],
             "type": media_type,
             "url": "https://www.instagram.com/p/" + node["shortcode"],
             "image_url": node["display_url"],
@@ -140,33 +141,42 @@ class SearchInstagram(Search):
             "num_likes": node["edge_media_preview_like"]["count"],
             "num_comments": node.get("edge_media_preview_comment", {}).get("count", 0),
             "num_media": num_media,
-            "subject": ""
+            "location_name": location["name"],
+            "location_latlong": location["latlong"],
+            "location_city": location["city"],
+            "unix_timestamp": node["taken_at_timestamp"]
         }
 
         return mapped_item
 
-    def parse_itemlist_item(self, node):
+    @staticmethod
+    def parse_itemlist_item(node):
         """
         Parse Instagram post in 'item list' format
 
         :param node:  Data as received from Instagram
         :return dict:  Mapped item
         """
-        num_media = 1 if node["media_type"] != self.MEDIA_TYPE_CAROUSEL else len(node["carousel_media"])
+        num_media = 1 if node["media_type"] != SearchInstagram.MEDIA_TYPE_CAROUSEL else len(node["carousel_media"])
         caption = "" if not node.get("caption") else node["caption"]["text"]
 
         # get media url
         # for carousels, get the first media item, for videos, get the video
         # url, for photos, get the highest resolution
-        if node["media_type"] == self.MEDIA_TYPE_CAROUSEL:
+        if node["media_type"] == SearchInstagram.MEDIA_TYPE_CAROUSEL:
             media_node = node["carousel_media"][0]
         else:
             media_node = node
 
-        if media_node["media_type"] == self.MEDIA_TYPE_VIDEO:
+        if media_node["media_type"] == SearchInstagram.MEDIA_TYPE_VIDEO:
             media_url = media_node["video_versions"][0]["url"]
-            display_url = media_node["image_versions2"]["candidates"][0]["url"]
-        elif media_node["media_type"] == self.MEDIA_TYPE_PHOTO:
+            if "image_versions2" in media_node:
+                display_url = media_node["image_versions2"]["candidates"][0]["url"]
+            else:
+                # no image links at all :-/
+                # video is all we have
+                display_url = media_node["video_versions"][0]["url"]
+        elif media_node["media_type"] == SearchInstagram.MEDIA_TYPE_PHOTO:
             media_url = media_node["image_versions2"]["candidates"][0]["url"]
             display_url = media_url
         else:
@@ -174,12 +184,26 @@ class SearchInstagram(Search):
             display_url = ""
 
         # type, 'mixed' means carousel with video and photo
-        type_map = {self.MEDIA_TYPE_PHOTO: "photo", self.MEDIA_TYPE_VIDEO: "video"}
-        if node["media_type"] != self.MEDIA_TYPE_CAROUSEL:
+        type_map = {SearchInstagram.MEDIA_TYPE_PHOTO: "photo", SearchInstagram.MEDIA_TYPE_VIDEO: "video"}
+        if node["media_type"] != SearchInstagram.MEDIA_TYPE_CAROUSEL:
             media_type = type_map.get(node["media_type"], "unknown")
         else:
             media_types = set([s["media_type"] for s in node["carousel_media"]])
             media_type = "mixed" if len(media_types) > 1 else type_map.get(media_types.pop(), "unknown")
+
+        if "comment_count" in node:
+            num_comments = node["comment_count"]
+        elif "comments" in node and type(node["comments"]) is list:
+            num_comments = len(node["comments"])
+        else:
+            num_comments = -1
+
+        location = {"name": "", "latlong": "", "city": ""}
+        if node.get("location"):
+            location["name"] = node["location"].get("name")
+            location["latlong"] = str(node["location"]["lat"]) + "," + str(node["location"]["lng"]) if node[
+                "location"].get("lat") else ""
+            location["city"] = node["location"].get("city")
 
         mapped_item = {
             "id": node["code"],
@@ -189,7 +213,7 @@ class SearchInstagram(Search):
             "author": node["user"]["username"],
             "author_fullname": node["user"]["full_name"],
             "author_avatar_url": node["user"]["profile_pic_url"],
-            "timestamp": node["taken_at"],
+            "timestamp": datetime.datetime.fromtimestamp(node["taken_at"]).strftime("%Y-%m-%d %H:%M:%S"),
             "type": media_type,
             "url": "https://www.instagram.com/p/" + node["code"],
             "image_url": display_url,
@@ -198,9 +222,12 @@ class SearchInstagram(Search):
             # "usertags": ",".join(
             #     [u["node"]["user"]["username"] for u in node["edge_media_to_tagged_user"]["edges"]]),
             "num_likes": node["like_count"],
-            "num_comments": node["comment_count"],
+            "num_comments": num_comments,
             "num_media": num_media,
-            "subject": ""
+            "location_name": location["name"],
+            "location_latlong": location["latlong"],
+            "location_city": location["city"],
+            "unix_timestamp": node["taken_at"]
         }
 
         return mapped_item

@@ -9,7 +9,7 @@ import csv
 from pathlib import Path
 
 from common.lib.helpers import UserInput, convert_to_int
-from backend.abstract.processor import BasicProcessor
+from backend.lib.processor import BasicProcessor
 from common.lib.exceptions import ProcessorInterruptedException
 
 __author__ = "Stijn Peeters"
@@ -27,7 +27,7 @@ class GoogleVisionAPIFetcher(BasicProcessor):
     Request tags and labels from the Google Vision API for a given set of images
     """
     type = "google-vision-api"  # job type ID
-    category = "Metrics"  # category
+    category = "Post metrics"  # category
     title = "Google Vision API Analysis"  # title displayed in UI
     description = "Use the Google Vision API to annotate images with tags and labels identified via machine learning. " \
                   "One request will be made per image per annotation type. Note that this is NOT a free service and " \
@@ -40,13 +40,13 @@ class GoogleVisionAPIFetcher(BasicProcessor):
     ]
 
     @classmethod
-    def is_compatible_with(cls, module=None):
+    def is_compatible_with(cls, module=None, user=None):
         """
         Allow processor on image sets
 
-        :param module: Dataset or processor to determine compatibility with
+        :param module: Module to determine compatibility with
         """
-        return module.type == "image-downloader"
+        return module.type.startswith("image-downloader")
 
     options = {
         "amount": {
@@ -93,8 +93,12 @@ class GoogleVisionAPIFetcher(BasicProcessor):
         features = [{"type": feature} for feature in features]
 
         if not api_key:
-            self.dataset.update_status("You need to provide a valid API key", is_final=True)
-            self.dataset.finish(0)
+            self.dataset.finish_with_error("You need to provide a valid API key")
+            return
+
+        # is there anything for us to download?
+        if self.source_dataset.num_rows == 0:
+            self.dataset.finish_with_error("No images to download.")
             return
 
         max_images = convert_to_int(self.parameters.get("amount", 0), 100)
@@ -107,6 +111,11 @@ class GoogleVisionAPIFetcher(BasicProcessor):
 
             done += 1
             self.dataset.update_status("Annotating image %i/%i" % (done, total))
+            self.dataset.update_progress(done / total)
+
+            if image_file.name.startswith("."):
+                self.dataset.log(f"Skipping file {image_file.name}, probably not an image.")
+                continue
 
             try:
                 annotations = self.annotate_image(image_file, api_key, features)

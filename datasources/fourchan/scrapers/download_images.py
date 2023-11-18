@@ -4,10 +4,8 @@
 import requests
 import random
 
-from backend.abstract.worker import BasicWorker
-
-import config
-
+from backend.lib.worker import BasicWorker
+from common.config_manager import config
 
 class ImageDownloader(BasicWorker):
 	"""
@@ -17,7 +15,7 @@ class ImageDownloader(BasicWorker):
 
 	todo: shrink images or keep archive at a manageable size otherwise
 	"""
-	type = "4chan-image"
+	type = "fourchan-image"
 	pause = 1
 	max_workers = 10
 
@@ -31,7 +29,7 @@ class ImageDownloader(BasicWorker):
 		"""
 		try:
 			url = "http://i.4cdn.org/%s/%s%s" % (self.job.details["board"], self.job.details["tim"], self.job.details["ext"])
-			image = requests.get(url, timeout=config.SCRAPE_TIMEOUT * 3)
+			image = requests.get(url, timeout=config.get('SCRAPE_TIMEOUT') * 3)
 		except (requests.exceptions.RequestException, ConnectionRefusedError) as e:
 			# something wrong with our internet connection? or blocked by 4chan?
 			# try again in a minute

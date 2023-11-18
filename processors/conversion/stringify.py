@@ -2,8 +2,9 @@
 Collapse post bodies into one long string
 """
 import re
+import string
 
-from backend.abstract.processor import BasicProcessor
+from backend.lib.processor import BasicProcessor
 from common.lib.helpers import UserInput
 
 __author__ = "Sal Hagen"
@@ -17,8 +18,8 @@ class Stringify(BasicProcessor):
 	"""
 	type = "stringify-posts"  # job type ID
 	category = "Conversion" # category
-	title = "Merge post texts"  # title displayed in UI
-	description = "Collapses all posts in the results into one plain text string. The result can be used for word clouds, word trees, et cetera."  # description displayed in UI
+	title = "Merge texts"  # title displayed in UI
+	description = "Merges the data from the body column into a single text file. The result can be used for word clouds, word trees, etc."  # description displayed in UI
 	extension = "txt"  # extension of result file, used internally and in UI
 
 	options = {
@@ -31,6 +32,11 @@ class Stringify(BasicProcessor):
 			"type": UserInput.OPTION_TOGGLE,
 			"default": False,
 			"help": "Remove numbers"
+		},
+		"strip-punctuation": {
+			"type": UserInput.OPTION_TOGGLE,
+			"default": False,
+			"help": "Remove punctuation"
 		},
 		"to-lowercase": {
 			"type": UserInput.OPTION_TOGGLE,
@@ -46,20 +52,24 @@ class Stringify(BasicProcessor):
 		"""
 
 		strip_urls = self.parameters.get("strip-urls")
+		strip_punctuation = self.parameters.get("strip-punctuation")
 		strip_numbers = self.parameters.get("strip-numbers")
 		to_lowercase = self.parameters.get("to-lowercase")
 
 		link_regex = re.compile(r"https?://[^\s]+")\
 
+		regex = ""
 		if strip_numbers:
-			delete_regex = re.compile(r"[^a-zA-Z)(.,\n -]")
-		else:
-			delete_regex = re.compile(r"[^a-zA-Z0-9)(.,\n -]")
+			regex += "0-9"
+		if strip_punctuation:
+			regex += string.punctuation
+		
+		delete_regex = re.compile("[\n\t" + regex + "]")
 
 		posts = 0
 		self.dataset.update_status("Processing posts")
-		with self.dataset.get_results_path().open("w") as results:
-			for post in self.iterate_items(self.source_file):
+		with self.dataset.get_results_path().open("w", encoding="utf-8") as results:
+			for post in self.source_dataset.iterate_items(self):
 				posts += 1
 				if not post["body"]:
 					continue

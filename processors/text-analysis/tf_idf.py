@@ -8,7 +8,7 @@ import pandas as pd
 import itertools
 
 from common.lib.helpers import UserInput, convert_to_int
-from backend.abstract.processor import BasicProcessor
+from backend.lib.processor import BasicProcessor
 
 from sklearn.feature_extraction.text import TfidfVectorizer
 from gensim.models import TfidfModel
@@ -21,14 +21,14 @@ __email__ = "4cat@oilab.eu"
 
 class TfIdf(BasicProcessor):
 	"""
-	
+
 	Get tf-idf terms
 
 	"""
 	type = "tfidf"  # job type ID
 	category = "Text analysis"  # category
 	title = "Tf-idf"  # title displayed in UI
-	description = "Get the tf-idf values of tokenised text. Works better with more documents (e.g. day-separated)."  # description displayed in UI
+	description = "Get the tf-idf values of tokenised text. Works better with more documents (e.g. time-separated)."  # description displayed in UI
 	extension = "csv"  # extension of result file, used internally and in UI
 
 	options = {
@@ -89,11 +89,11 @@ class TfIdf(BasicProcessor):
 	]
 
 	@classmethod
-	def is_compatible_with(cls, module=None):
+	def is_compatible_with(cls, module=None, user=None):
 		"""
 		Allow processor on token sets
 
-		:param module: Dataset or processor to determine compatibility with
+		:param module: Module to determine compatibility with
 		"""
 		return module.type == "tokenise-posts"
 
@@ -106,12 +106,12 @@ class TfIdf(BasicProcessor):
 		library = self.parameters.get("library", "gensim")
 
 		if "-" not in self.parameters.get("n_size"):
-			n_size = convert_to_int(self.parameters.get("n_size", 1), 1) 
+			n_size = convert_to_int(self.parameters.get("n_size", 1), 1)
 			n_size = (n_size, n_size) # needs to be a tuple for sklearn.
 		else:
 			n_size_split = self.parameters.get("n_size").split("-")
 			n_size = (convert_to_int(n_size_split[0]), convert_to_int(n_size_split[1]))
-		
+
 		min_occurrences = convert_to_int(self.parameters.get("min_occurrences", 1), 1)
 		max_occurrences = convert_to_int(self.parameters.get("min_occurrences", -1), -1)
 		max_output = convert_to_int(self.parameters.get("max_output", 10), 10)
@@ -124,6 +124,9 @@ class TfIdf(BasicProcessor):
 
 		# Go through all archived token sets and generate collocations for each
 		for token_file in self.iterate_archive_contents(self.source_file):
+			if token_file.name == '.token_metadata.json':
+				# Skip metadata
+				continue
 			# Get the date
 			date_string = token_file.stem
 			dates.append(date_string)
@@ -215,7 +218,7 @@ class TfIdf(BasicProcessor):
 		for i, doc in enumerate(vector):
 			doc_results = [[dict_tokens[id], freq] for id, freq in doc]
 			doc_results.sort(key = lambda x: x[1], reverse=True) # Sort on score
-			
+
 			for word, score in doc_results[:top_n]:
 				result = {}
 				result["item"] = word
@@ -238,7 +241,7 @@ class TfIdf(BasicProcessor):
 
 		:returns dict, results
 		"""
-		
+
 		# Vectorise
 		self.dataset.update_status("Vectorizing")
 		tfidf_vectorizer = TfidfVectorizer(min_df=min_occurrences, max_df=max_occurrences, ngram_range=ngram_range,
@@ -251,17 +254,17 @@ class TfIdf(BasicProcessor):
 			self.dataset.finish(0)
 			return
 
-		feature_array = np.array(tfidf_vectorizer.get_feature_names())
+		feature_array = np.array(tfidf_vectorizer.get_feature_names_out())
 		tfidf_sorting = np.argsort(tfidf_matrix.toarray()).flatten()[::-1]
 
 		# Print and store top n highest scoring tf-idf scores
 		top_words = feature_array[tfidf_sorting[:top_n]]
 		weights = np.asarray(tfidf_matrix.mean(axis=0)).ravel().tolist()
-		df_weights = pd.DataFrame({"term": tfidf_vectorizer.get_feature_names(), "weight": weights})
+		df_weights = pd.DataFrame({"term": tfidf_vectorizer.get_feature_names_out(), "weight": weights})
 		df_weights = df_weights.sort_values(by="weight", ascending=False).head(100)
 
 		self.dataset.update_status("Writing tf-idf vector to csv")
-		df_matrix = pd.DataFrame(tfidf_matrix.toarray(), columns=tfidf_vectorizer.get_feature_names())
+		df_matrix = pd.DataFrame(tfidf_matrix.toarray(), columns=tfidf_vectorizer.get_feature_names_out())
 
 		# Turn the dataframe 90 degrees
 		df_matrix = df_matrix.transpose()

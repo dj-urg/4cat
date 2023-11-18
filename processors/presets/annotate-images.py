@@ -1,7 +1,7 @@
 """
 Annotate top images
 """
-from backend.abstract.preset import ProcessorPreset
+from backend.lib.preset import ProcessorPreset
 
 from common.lib.helpers import UserInput, convert_to_int
 
@@ -11,11 +11,10 @@ class AnnotateImages(ProcessorPreset):
     Run processor pipeline to annotate images
     """
     type = "preset-annotate-images"  # job type ID
-    category = "Presets"  # category. 'Presets' are always listed first in the UI.
+    category = "Combined processors"  # category. 'Combined processors' are always listed first in the UI.
     title = "Annotate images with Google Vision API"  # title displayed in UI
-    description = "Use the Google Vision API to annotate images linked to in the dataset the most often. Note that " \
-                  "the Google Vision API is a paid service and using this processor will count towards your Google " \
-                  "API credit!"
+    description = "Use the Google Vision API to extract labels detected in the most-linked images from the dataset. Note that " \
+                  "this is a paid service and will count towards your API credit."
     extension = "csv"
 
     references = [
@@ -34,7 +33,7 @@ class AnnotateImages(ProcessorPreset):
         "api_key": {
             "type": UserInput.OPTION_TEXT,
             "help": "API Key",
-            "tooltip": "The API Key for the Google API account you want to query with. You can generate and find this"
+            "tooltip": "The API Key for your Google API account. You can generate and find this "
                        "key on the API dashboard."
         },
         "features": {
@@ -85,6 +84,7 @@ class AnnotateImages(ProcessorPreset):
                 "type": "image-downloader",
                 "parameters": {
                     "amount": amount,
+                    "columns": "item",
                     "overwrite": False
                 }
             },

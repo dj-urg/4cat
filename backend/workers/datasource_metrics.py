@@ -6,10 +6,8 @@ and to show how many posts a local datasource contains.
 
 from datetime import datetime, time, timezone
 
-from backend.abstract.worker import BasicWorker
-from common.lib.dataset import DataSet
-
-import config
+from backend.lib.worker import BasicWorker
+from common.config_manager import config
 
 class DatasourceMetrics(BasicWorker):
 	"""
@@ -19,6 +17,8 @@ class DatasourceMetrics(BasicWorker):
 	"""
 	type = "datasource-metrics"
 	max_workers = 1
+
+	ensure_job = {"remote_id": "localhost", "interval": 86400}
 
 	def work(self):
 		"""
@@ -48,23 +48,38 @@ class DatasourceMetrics(BasicWorker):
 			""")
 
 		added_datasources = [row["datasource"] for row in self.db.fetchall("SELECT DISTINCT(datasource) FROM metrics")]
+		enabled_datasources = config.get("datasources.enabled", {})
 
 		for datasource_id in self.all_modules.datasources:
+			if datasource_id not in enabled_datasources:
+				continue
 
-			datasource = self.all_modules.datasources[datasource_id]
+			datasource = self.all_modules.workers.get(datasource_id + "-search")
+			if not datasource:
+				continue
+
+			# Database IDs may be different from the Datasource ID (e.g. the datasource "4chan" became "fourchan" but the database ID remained "4chan")
+			database_db_id = datasource.prefix if hasattr(datasource, "prefix") else datasource_id
+
+			is_local = True if hasattr(datasource, "is_local") and datasource.is_local else False
+			is_static = True if hasattr(datasource, "is_static") and datasource.is_static else False
 
 			# Only update local datasources
-			if datasource.get("is_local"):
+			if is_local:
 
-				boards = config.DATASOURCES[datasource_id].get("boards")
-
-				if not boards:
-					boards = [""]
+				# Some translating..
+				settings_id = datasource_id
+				if datasource_id == "4chan":
+					settings_id = "fourchan"
+				elif datasource_id == "8chan":
+					settings_id = "eightchan"
 				
+				boards = [b for b in config.get(settings_id + "-search.boards", [])]
+
 				# If a datasource is static (so not updated) and it
 				# is already present in the metrics table, we don't
 				# need to update its metrics anymore.
-				if datasource.get("is_static") and datasource_id in added_datasources:
+				if is_static and datasource_id in added_datasources:
 						continue
 				else:
 
@@ -73,7 +88,7 @@ class DatasourceMetrics(BasicWorker):
 					# -------------------------
 
 					# Get the name of the posts table for this datasource
-					posts_table = datasource_id if "posts_" + datasource_id not in all_tables else "posts_" + datasource_id
+					posts_table = datasource_id if "posts_" + database_db_id not in all_tables else "posts_" + database_db_id
 
 					# Count and update for every board individually
 					for board in boards:
@@ -91,9 +106,8 @@ class DatasourceMetrics(BasicWorker):
 
 						# If the datasource is dynamic, we also only update days
 						# that haven't been added yet - these are heavy queries.
-						if not datasource.get("is_static"):
-							
-							days_added = self.db.fetchall("SELECT date FROM metrics WHERE datasource = '%s' AND board = '%s' AND metric = 'posts_per_day';" % (datasource_id, board))
+						if not is_static:
+							days_added = self.db.fetchall("SELECT date FROM metrics WHERE datasource = '%s' AND board = '%s' AND metric = 'posts_per_day';" % (database_db_id, board))
 
 							if days_added:
 
@@ -109,7 +123,7 @@ class DatasourceMetrics(BasicWorker):
 								after_timestamp = int(last_day_added.timestamp())
 
 								time_sql += " AND timestamp > " + str(after_timestamp) + " "
-						
+
 						self.log.info("Calculating metric posts_per_day for datasource %s%s" % (datasource_id, "/" + board))
 
 						# Get those counts
@@ -118,17 +132,16 @@ class DatasourceMetrics(BasicWorker):
 							FROM %s
 							WHERE %s AND %s
 							GROUP BY metric, datasource, board, date;
-							""" % (datasource_id, posts_table, board_sql, time_sql)
-						
+							""" % (database_db_id, posts_table, board_sql, time_sql)
 						# Add to metrics table
 						rows = [dict(row) for row in self.db.fetchall(query)]
-						
+
 						if rows:
 							for row in rows:
 								self.db.insert("metrics", row)
 
 					# -------------------------------
-					#   no other metrics added yet 
+					#   no other metrics added yet
 					# -------------------------------
 
 		self.job.finish()

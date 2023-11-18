@@ -3,8 +3,7 @@ Convert a CSV file to JSON
 """
 import json
 
-from backend.abstract.processor import BasicProcessor
-from common.lib.exceptions import ProcessorInterruptedException
+from backend.lib.processor import BasicProcessor
 
 __author__ = "Stijn Peeters"
 __credits__ = ["Stijn Peeters"]
@@ -18,18 +17,18 @@ class ConvertCSVToJSON(BasicProcessor):
 	type = "convert-csv"  # job type ID
 	category = "Conversion"  # category
 	title = "Convert to JSON"  # title displayed in UI
-	description = "Convert a CSV file to JSON"  # description displayed in UI
+	description = "Change a CSV file to a JSON file"  # description displayed in UI
 	extension = "json"  # extension of result file, used internally and in UI
 
 	@classmethod
-	def is_compatible_with(cls, module=None):
+	def is_compatible_with(cls, module=None, user=None):
 		"""
 		Determine if processor is compatible with a dataset or processor
 
-		:param module: Dataset or processor to determine compatibility with
+		:param module: Module to determine compatibility with
 		"""
 		
-		return module.get_extension() == ".csv"
+		return module.get_extension() == "csv"
 
 	def process(self):
 		"""
@@ -43,11 +42,7 @@ class ConvertCSVToJSON(BasicProcessor):
 		# and this buffers one row at most
 		with self.dataset.get_results_path().open("w") as output:
 			output.write("[")
-			for post in self.iterate_items(self.source_file):
-				# stop processing if worker has been asked to stop
-				if self.interrupted:
-					raise ProcessorInterruptedException("Interrupted while processing CSV file")
-
+			for post in self.source_dataset.iterate_items(self):
 				posts += 1
 
 				if posts > 1:

@@ -1,11 +1,9 @@
 """
 Split results by thread
 """
-import zipfile
-import shutil
 import csv
 
-from backend.abstract.processor import BasicProcessor
+from backend.lib.processor import BasicProcessor
 
 __author__ = "Stijn Peeters"
 __credits__ = ["Stijn Peeters"]
@@ -24,19 +22,17 @@ class ThreadSplitter(BasicProcessor):
 	type = "split-threads"  # job type ID
 	category = "Conversion" # category
 	title = "Split by thread"  # title displayed in UI
-	description = "Split the result over separate csv files per thread. The threads can then be downloaded as an archive containing the separate CSV files."  # description displayed in UI
+	description = "Split the dataset per thread. The result is a zip archive containing separate CSV files."  # description displayed in UI
 	extension = "zip"  # extension of result file, used internally and in UI
 
 	@classmethod
-	def is_compatible_with(cls, module=None):
+	def is_compatible_with(cls, module=None, user=None):
 		"""
 		Determine if processor is compatible with dataset
 
-		:param module: Dataset or processor to determine compatibility with
+		:param module: Module to determine compatibility with
 		"""
-		if module.is_dataset():
-			return module.parameters.get("datasource") in ("4chan", "8chan", "reddit", "breitbart")
-		return False
+		return module.parameters.get("datasource") in ("4chan", "8chan", "reddit", "breitbart")
 		
 	def process(self):
 		"""
@@ -50,8 +46,8 @@ class ThreadSplitter(BasicProcessor):
 		results_path = self.dataset.get_staging_area()
 
 		# read and write
-		self.dataset.update_status("Creating thread files")
-		for post in self.iterate_items(self.source_file):
+		self.dataset.update_status("Creating separate thread files")
+		for post in self.source_dataset.iterate_items(self):
 			thread = results_path.joinpath(post["thread_id"] + ".csv")
 			new = not thread.exists()
 

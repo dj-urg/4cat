@@ -5,7 +5,6 @@ import signal
 import time
 
 from backend import all_modules
-from backend.lib.keyboard import KeyPoller
 from common.lib.exceptions import JobClaimedException
 
 
@@ -35,26 +34,27 @@ class WorkerManager:
 		self.db = database
 		self.log = logger
 
-		if not as_daemon:
-			# listen for input if running interactively
-			self.key_poller = KeyPoller(manager=self)
-			self.key_poller.start()
-		else:
+		if as_daemon:
 			signal.signal(signal.SIGTERM, self.abort)
 			signal.signal(signal.SIGINT, self.request_interrupt)
 
+		# datasources are initialized here; the init_datasource functions found in their respective __init__.py files
+		# are called which, in the case of scrapers, also adds the scrape jobs to the queue.
 		self.validate_datasources()
 
-		# queue a job for the api handler so it will be run
-		self.queue.add_job("api", remote_id="localhost")
+		# queue jobs for workers that always need one
+		for worker_name, worker in all_modules.workers.items():
+			if hasattr(worker, "ensure_job"):
+				self.queue.add_job(jobtype=worker_name, **worker.ensure_job)
 
-		# queue worker that deletes expired datasets every so often
-		self.queue.add_job("expire-datasets", remote_id="localhost", interval=300)
+		self.log.info("4CAT Started")
 
-		# queue worker that calculates datasource metrics every day
-		self.queue.add_job("datasource-metrics", remote_id="localhost", interval=86400)
-
-		self.log.info('4CAT Started')
+		# flush module collector log buffer
+		# the logger is not available when this initialises
+		# but it is now!
+		if all_modules.log_buffer:
+			self.log.warning(all_modules.log_buffer)
+			all_modules.log_buffer = ""
 
 		# it's time
 		self.loop()
@@ -76,6 +76,7 @@ class WorkerManager:
 			all_workers = self.worker_pool[jobtype]
 			for worker in all_workers:
 				if not worker.is_alive():
+					self.log.debug(f"Terminating worker {worker.job.data['jobtype']}/{worker.job.data['remote_id']}")
 					worker.join()
 					self.worker_pool[jobtype].remove(worker)
 
@@ -94,14 +95,16 @@ class WorkerManager:
 				# worker slots, start a new worker to run it
 				if len(self.worker_pool[jobtype]) < worker_class.max_workers:
 					try:
-						self.log.debug("Starting new worker for job %s" % jobtype)
 						job.claim()
 						worker = worker_class(logger=self.log, manager=self, job=job, modules=all_modules)
 						worker.start()
+						self.log.debug(f"Starting new worker of for job {job.data['jobtype']}/{job.data['remote_id']}")
 						self.worker_pool[jobtype].append(worker)
 					except JobClaimedException:
 						# it's fine
 						pass
+			else:
+				self.log.error("Unknown job type: %s" % jobtype)
 
 		time.sleep(1)
 
@@ -114,7 +117,10 @@ class WorkerManager:
 		properly ends.
 		"""
 		while self.looping:
-			self.delegate()
+			try:
+				self.delegate()
+			except KeyboardInterrupt:
+				self.looping = False
 
 		self.log.info("Telling all workers to stop doing whatever they're doing...")
 		for jobtype in self.worker_pool:
@@ -145,7 +151,7 @@ class WorkerManager:
 		"""
 
 		for datasource in all_modules.datasources:
-			if datasource + "-search" not in all_modules.workers:
+			if datasource + "-search" not in all_modules.workers and datasource + "-import" not in all_modules.workers:
 				self.log.error("No search worker defined for datasource %s or its modules are missing. Search queries will not be executed." % datasource)
 
 			all_modules.datasources[datasource]["init"](self.db, self.log, self.queue, datasource)

@@ -3,8 +3,7 @@ Convert Google Vision API annotations to CSV
 """
 import csv
 
-from backend.abstract.processor import BasicProcessor
-from common.lib.exceptions import ProcessorInterruptedException
+from backend.lib.processor import BasicProcessor
 
 __author__ = "Stijn Peeters"
 __credits__ = ["Stijn Peeters"]
@@ -24,16 +23,16 @@ class ConvertVisionOutputToCSV(BasicProcessor):
     """
     type = "convert-vision-to-csv"  # job type ID
     category = "Conversion"  # category
-    title = "Convert to CSV"  # title displayed in UI
+    title = "Convert Vision results to CSV"  # title displayed in UI
     description = "Convert the Vision API output to a simplified CSV file."  # description displayed in UI
     extension = "csv"  # extension of result file, used internally and in UI
 
     @classmethod
-    def is_compatible_with(cls, module=None):
+    def is_compatible_with(cls, module=None, user=None):
         """
         Determine if processor is compatible with dataset
 
-        :param module: Dataset or processor to determine compatibility with
+        :param module: Module to determine compatibility with
         """
         return module.type == "google-vision-api"
 
@@ -52,10 +51,7 @@ class ConvertVisionOutputToCSV(BasicProcessor):
             return
 
         # recreate CSV file with the new dialect
-        for annotations in self.iterate_items(self.source_file):
-            if self.interrupted:
-                raise ProcessorInterruptedException("Interrupted while converting Vision API output")
-
+        for annotations in self.source_dataset.iterate_items(self):
             file_result = {}
 
             # special case format
@@ -99,6 +95,7 @@ class ConvertVisionOutputToCSV(BasicProcessor):
             done += 1
             if done % 25 == 0:
                 self.dataset.update_status("Processed %i/%i image files" % (done, self.source_dataset.num_rows))
+                self.dataset.update_progress(done / self.source_dataset.num_rows)
 
         for index, value in enumerate(result):
             result[index] = {**{annotation_type: "" for annotation_type in annotation_types}, **value}

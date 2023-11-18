@@ -10,8 +10,9 @@ from PIL import Image, ImageFile, ImageOps, ImageDraw, UnidentifiedImageError
 from sklearn.cluster import KMeans
 
 from common.lib.helpers import UserInput, convert_to_int
-from backend.abstract.processor import BasicProcessor
+from backend.lib.processor import BasicProcessor
 from common.lib.exceptions import ProcessorInterruptedException
+from common.config_manager import config
 
 __author__ = "Stijn Peeters"
 __credits__ = ["Stijn Peeters"]
@@ -27,61 +28,73 @@ class ImageWallGenerator(BasicProcessor):
 	type = "image-wall"  # job type ID
 	category = "Visual"  # category
 	title = "Image wall"  # title displayed in UI
-	description = "Put all images in an archive into a single combined image, optionally sorting and resizing them"
+	description = "Put all images in a single combined image. Images can be sorted and resized."
 	extension = "png"  # extension of result file, used internally and in UI
-
-	options = {
-		"amount": {
-			"type": UserInput.OPTION_TEXT,
-			"help": "No. of images (max 1000)",
-			"default": 100,
-			"min": 0,
-			"max": 1000,
-			"tooltip": "'0' uses as many images as available in the source image archive (up to 1000)"
-		},
-		"tile-size": {
-			"type": UserInput.OPTION_CHOICE,
-			"options": {
-				"square": "Square",
-				"average": "Average image in set",
-				"fit-height": "Fit height"
-			},
-			"default": "square",
-			"help": "Image tile size",
-			"tooltip": "'Fit height' retains image ratios but resizes them all to be the same height"
-		},
-		"sort-mode": {
-			"type": UserInput.OPTION_CHOICE,
-			"help": "Sort images by",
-			"options": {
-				"": "Do not sort",
-				"random": "Random",
-				"dominant": "Dominant colour (decent, faster)",
-				"kmeans-dominant": "Dominant K-means (precise, slow)",
-				"kmeans-average": "Weighted K-means average (precise, slow)",
-				"average-rgb": "Average colour (RGB; imprecise, fastest)",
-				"average-hsv": "Average colour (HSV; imprecise, fastest)",
-			},
-			"tooltip": "If you're unsure what sorting method to use, dominant colour usually gives decent results",
-			"default": ""
-		}
-	}
 
 	# images will be arranged and resized to fit these image wall dimensions
 	# note that image aspect ratio may not allow for a precise fit
 	TARGET_WIDTH = 2560
 	TARGET_HEIGHT = 1440
 
+	config = {
+				 "image-visuals.max_images": {
+					 "type": UserInput.OPTION_TEXT,
+					 "coerce_type": int,
+					 "default": 1000,
+					 "help": "Max images when visualising",
+					 "tooltip": "0 will allow visualization of any number of images."
+				 }
+	}
 
 	@classmethod
-	def is_compatible_with(cls, module=None):
+	def is_compatible_with(cls, module=None, user=None):
 		"""
 		Allow processor on token sets
 
 		:param module: Dataset or processor to determine compatibility with
 		"""
-		return module.type == "image-downloader"
+		return module.type.startswith("image-downloader")
 
+	@classmethod
+	def get_options(cls, parent_dataset=None, user=None):
+		max_number_images = int(config.get("image-visuals.max_images", 1000, user=user))
+		options = {
+			"amount": {
+				"type": UserInput.OPTION_TEXT,
+				"help": "No. of images" + (f" (max {max_number_images})" if max_number_images != 0 else ""),
+				"default": 100 if max_number_images == 0 else min(max_number_images, 100),
+				"min": 0 if max_number_images == 0 else 1,
+				"max": max_number_images,
+				"tooltip": "'0' uses as many images as available in the archive" + (f" (up to {max_number_images})" if max_number_images != 0 else "")
+			},
+			"tile-size": {
+				"type": UserInput.OPTION_CHOICE,
+				"options": {
+					"square": "Square",
+					"average": "Average image in set",
+					"fit-height": "Fit height"
+				},
+				"default": "square",
+				"help": "Image tile size",
+				"tooltip": "'Fit height' retains image ratios but makes them have the same height"
+			},
+			"sort-mode": {
+				"type": UserInput.OPTION_CHOICE,
+				"help": "Sort images by",
+				"options": {
+					"": "Do not sort",
+					"random": "Random",
+					"dominant": "Dominant colour (decent, faster)",
+					"kmeans-dominant": "Dominant K-means (precise, slow)",
+					"kmeans-average": "Weighted K-means average (precise, slow)",
+					"average-rgb": "Average colour (RGB; imprecise, fastest)",
+					"average-hsv": "Average colour (HSV; imprecise, fastest)",
+				},
+				"tooltip": "If you're unsure what sorting method to use, dominant colour usually gives decent results",
+				"default": ""
+			}
+		}
+		return options
 	def process(self):
 		"""
 		This takes a 4CAT results file as input, and outputs a new CSV file
@@ -132,7 +145,7 @@ class ImageWallGenerator(BasicProcessor):
 		random_values = list(range(0, self.source_dataset.num_rows))
 		random.shuffle(random_values)
 
-		for path in self.iterate_archive_contents(self.source_file, staging_area):
+		for path in self.iterate_archive_contents(self.source_file, staging_area, immediately_delete=False):
 			if self.interrupted:
 				raise ProcessorInterruptedException("Interrupted while determining image wall order")
 
@@ -143,10 +156,13 @@ class ImageWallGenerator(BasicProcessor):
 				continue
 
 			self.dataset.update_status("Analysing %s (%i/%i)" % (path.name, len(dimensions), self.source_dataset.num_rows))
+			self.dataset.update_progress(len(dimensions) / self.source_dataset.num_rows / 2)
 
 			# these calculations can take ages for huge images, so resize if it is
 			# larger than the threshold
 			dimensions[path.name] = (picture.width, picture.height)
+			value = 0
+			
 			if sort_mode not in ("", "random") and (picture.height > sample_max or picture.width > sample_max):
 				sample_width = int(sample_max * picture.width / max(picture.width, picture.height))
 				sample_height = int(sample_max * picture.height / max(picture.width, picture.height))
@@ -221,12 +237,20 @@ class ImageWallGenerator(BasicProcessor):
 				value = (0, 0, 0)
 
 			# converted to HSV, because RGB does not sort nicely
-			image_colours[path.name] = colorsys.rgb_to_hsv(*value)
+			if type(value) is int:
+				image_colours[path.name] = value
+			else:
+				image_colours[path.name] = colorsys.rgb_to_hsv(*value)
+
 			index += 1
 
 		# only retain the top n of the sorted list of images - this gives us
 		# our final image set
-		sorted_image_files = [path for path in sorted(image_colours, key=lambda k: image_colours[k])[:max_images]]
+		if max_images == 0:
+			# Use all images
+			sorted_image_files = [path for path in sorted(image_colours, key=lambda k: image_colours[k])]
+		else:
+			sorted_image_files = [path for path in sorted(image_colours, key=lambda k: image_colours[k])[:max_images]]
 		dimensions = {path: dimensions[path] for path in sorted_image_files}
 
 		if not dimensions:
@@ -323,6 +347,7 @@ class ImageWallGenerator(BasicProcessor):
 		for path in sorted_image_files:
 			counter += 1
 			self.dataset.update_status("Rendering %s (%i/%i) to image wall" % (path, counter, len(sorted_image_files)))
+			self.dataset.update_progress(0.5 + (counter / len(sorted_image_files) / 2))
 			picture = Image.open(str(staging_area.joinpath(path)))
 
 			if tile_x == -1:

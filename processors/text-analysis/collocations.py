@@ -10,7 +10,7 @@ import operator
 from nltk.collocations import *
 
 from common.lib.helpers import UserInput
-from backend.abstract.processor import BasicProcessor
+from backend.lib.processor import BasicProcessor
 
 class GetCollocations(BasicProcessor):
 	"""
@@ -18,16 +18,16 @@ class GetCollocations(BasicProcessor):
 	"""
 	type = "collocations"  # job type ID
 	category = "Text analysis"  # category
-	title = "Word collocations"  # title displayed in UI
-	description = "Extracts word collocations from a set of tokens."  # description displayed in UI
+	title = "Extract co-words"  # title displayed in UI
+	description = "Extracts words appearing close to each other from a set of tokens."  # description displayed in UI
 	extension = "csv"  # extension of result file, used internally and in UI
 
 	@classmethod
-	def is_compatible_with(cls, module=None):
+	def is_compatible_with(cls, module=None, user=None):
 		"""
 		Allow processor on token sets
 
-		:param module: Dataset or processor to determine compatibility with
+		:param module: Module to determine compatibility with
 		"""
 		return module.type == "tokenise-posts"
 
@@ -37,47 +37,57 @@ class GetCollocations(BasicProcessor):
 			"type": UserInput.OPTION_CHOICE,
 			"default": 2,
 			"options": {
-				"2": "2 (~ bigrams)",
-				"3": "3 (~ trigrams)"},
-			"help": "N-size - How many words to generate collocations for"
+				"2": "2 (bigrams)",
+				"3": "3 (trigrams)"},
+			"help": "N-size - How many co-words to include"
 		},
 		"window_size": {
 			"type": UserInput.OPTION_CHOICE,
 			"default": "2",
 			"options": {"2": "2", "3": "3", "4": "4", "5": "5", "6": "6"},
-			"help": "Window size"
+			"help": "Window size",
+			"tooltip": "This sets the length of word sequences wherein words are considered co-words. For instance, " \
+					   "a window of 3 with the sentence \"the quick brown fox\" will count \"the\", \"quick\", " \
+					   "and \"brown\" as co-words, as well as \"quick\", \"brown\", and \"fox\", but not \"the\" and " \
+					   "\"fox\"."
 		},
 		"query_string": {
 			"type": UserInput.OPTION_TEXT,
 			"default": "",
-			"help": "Required words (comma-separated)"
+			"help": "Only include words next to this required word",
+			"tooltip": "May include multiple words (separate by comma)"
+
 		},
 		"forbidden_words": {
 			"type": UserInput.OPTION_TEXT,
 			"default": "",
-			"help": "Words to exclude (comma-separated)"
+			"help": "Word(s) to exclude (comma-separated)"
 		},
 		"unique": {
 			"type": UserInput.OPTION_TOGGLE,
 			"default": True,
-			"help": "Only keep unique collocations per post",
-			"tooltip": "This is useful for filtering out collocations for spammy posts. For instance, for \"dog bark dog bark dog bark\" it will only count collocations for \"bark\" and \"dog\" once."
+			"help": "Only keep unique co-word pairs per post",
+			"tooltip": "This is useful for filtering out common co-word pairs caused by spam. " \
+					   "For instance, in the sentence \"quick fox quick fox quick fox\", " \
+					   "the pair \"fox\" and \"quick\" will only be counted once."
 		},
 		"sort_words": {
 			"type": UserInput.OPTION_TOGGLE,
 			"default": False,
-			"help": "Sort collocations",
-			"tooltip": "Sorts words alphabetically. This means \"dog bark\" and \"bark dog\" will result in the latter. If required words are given, these are also put in the first column (useful for e.g. word clouds). Word order can be relevant, so this is turned off by default."
+			"help": "Sort co-word pairs",
+			"tooltip": "Sorts co-word pairs alphabetically. This means \"quick fox\" will be shuffled to \"fox quick\". " \
+			"If a required word or words are given, these are put in first so their co-words can be easily extracted. " \
+			"Word order can be relevant, so this is turned off by default."
 		},
 		"min_frequency": {
 			"type": UserInput.OPTION_TEXT,
 			"default": 1,
-			"help": "Minimum frequency of words appearing together"
+			"help": "Minimum frequency of co-words occurrences"
 		},
 		"max_output": {
 			"type": UserInput.OPTION_TEXT,
 			"default": 0,
-			"help": "Max. number of results per token set. 0 for unlimited"
+			"help": "Maximum number of top co-words to extract (0 = all)"
 		}
 	}
 
@@ -107,12 +117,12 @@ class GetCollocations(BasicProcessor):
 			min_frequency = int(self.parameters.get("min_frequency", 0))
 		except (ValueError, TypeError) as e:
 			min_frequency = 0
-		 
+
 		query_string = self.parameters.get("query_string", "").replace(" ", "")
 
 		# n_size smaller than window_size does not make sense
 		n_size = min(n_size, window_size)
-		
+
 		if query_string:
 			query_string = query_string.lower().split(',')
 		else:
@@ -134,6 +144,9 @@ class GetCollocations(BasicProcessor):
 
 		# Go through all archived token sets and generate collocations for each
 		for token_file in self.iterate_archive_contents(self.source_file):
+			if token_file.name == '.token_metadata.json':
+				# Skip metadata
+				continue
 			# we support both pickle and json dumps of vectors
 			token_unpacker = pickle if token_file.suffix == "pb" else json
 
@@ -230,10 +243,10 @@ class GetCollocations(BasicProcessor):
 		:param str, forbidden_words:	possible list of words to exclude from the results
 		:param bool, unique:			Whether to filter for unique collocations per post.
 
-		:return: list of tuples with collocations 
-		
+		:return: list of tuples with collocations
+
 		"""
-		
+
 		# Two-word collocations (~ bigrams)
 		if n_size == 2:
 			finder = BigramCollocationFinder.from_words(tokens, window_size=window_size)
@@ -246,7 +259,7 @@ class GetCollocations(BasicProcessor):
 				# Filter out two times the occurance of the same query string
 				duplicate_filter = lambda w1, w2: (w1 in query_string and w2 in query_string)
 				finder.apply_ngram_filter(duplicate_filter)
-			
+
 			# Filter out forbidden words
 			if forbidden_words:
 				forbidden_words_filter = lambda w1, w2: any(string in (w1, w2) for string in forbidden_words)
@@ -260,7 +273,7 @@ class GetCollocations(BasicProcessor):
 			if query_string:
 				word_filter = lambda w1, w2, w3: not any(string in (w1, w2, w3) for string in query_string)
 				finder.apply_ngram_filter(word_filter)
-			
+
 			# Filter out forbidden words
 			if forbidden_words:
 				forbidden_words_filter = word_filter = lambda w1, w2, w3: any(string in (w1, w2, w3) for string in forbidden_words)

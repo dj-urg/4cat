@@ -3,7 +3,7 @@ Extract most-used images from corpus
 """
 import re
 
-from backend.abstract.processor import BasicProcessor
+from backend.lib.processor import BasicProcessor
 
 import networkx as nx
 
@@ -20,20 +20,19 @@ class QuoteNetworkGrapher(BasicProcessor):
 	"""
 	type = "quote-network"  # job type ID
 	category = "Networks"
-	title = "Quote network"  # title displayed in UI
-	description = "Create a Gephi-compatible network of quoted posts, with each reference to another post creating an edge between those posts. Post IDs may be correlated and triangulated with the full results set."  # description displayed in UI
+	title = "Reply network"  # title displayed in UI
+	description = "Create a GEXF network file of posts replying to each other. " \
+				  "Each reference to another post creates an edge between posts. "  # description displayed in UI
 	extension = "gexf"  # extension of result file, used internally and in UI
 
 	@classmethod
-	def is_compatible_with(cls, module=None):
+	def is_compatible_with(cls, module=None, user=None):
 		"""
 		Allow processor to run on chan datasets
 
-		:param module: Dataset or processor to determine compatibility with
+		:param module: Module to determine compatibility with
 		"""
-		if module.is_dataset:
-			return module.parameters.get("datasource") in ("4chan", "8chan", "8kun")
-		return False
+		return module.parameters.get("datasource") in ("fourchan", "eightchan", "eightkun")
 		
 	def process(self):
 		"""
@@ -46,7 +45,7 @@ class QuoteNetworkGrapher(BasicProcessor):
 		network = nx.Graph()
 
 		self.dataset.update_status("Reading source file")
-		for post in self.iterate_items(self.source_file):
+		for post in self.source_dataset.iterate_items(self):
 			quotes = link.findall(post["body"])
 			if quotes:
 				if post["id"] not in network.nodes:

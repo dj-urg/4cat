@@ -2,8 +2,12 @@
 Generate co-link network of URLs in posts
 """
 import re
+import time
 
-from backend.abstract.processor import BasicProcessor
+import psutil
+
+from backend.lib.processor import BasicProcessor
+from common.lib.exceptions import ProcessorInterruptedException
 from common.lib.helpers import UserInput
 
 import networkx as nx
@@ -19,16 +23,15 @@ class URLCoLinker(BasicProcessor):
 	"""
 	type = "url-network"  # job type ID
 	category = "Networks"  # category
-	title = "URL co-link network"  # title displayed in UI
-	description = "Create a Gephi-compatible GEXF network comprised of all URLs appearing in a post with at least " \
-				  "one other URL. Appearing in the same post constitutes an edge between these nodes. Edges are " \
-				  "weighted by amount of co-links."  # description displayed in UI
+	title = "URL co-occurence network"  # title displayed in UI
+	description = "Create a GEXF network file comprised of URLs appearing together (in a post or thread). " \
+				  "Edges are weighted by amount of co-links."  # description displayed in UI
 	extension = "gexf"  # extension of result file, used internally and in UI
 
 	options = {
 		"detail": {
 			"type": UserInput.OPTION_CHOICE,
-			"help": "Link detail level",
+			"help": "Use URL or domain name",
 			"options": {
 				"url": "Full URL",
 				"domain": "Domain name"
@@ -37,13 +40,13 @@ class URLCoLinker(BasicProcessor):
 		},
 		"level": {
 			"type": UserInput.OPTION_CHOICE,
-			"help": "Co-occurence context",
+			"help": "Set co-occurence by",
 			"options": {
-				"thread": "Thread (works best in full-thread data sets)",
+				"thread": "Thread (works best in full-thread datasets)",
 				"post": "Post"
 			},
 			"default": "thread",
-			"tooltip": "If 'thread' is selected, URLs are considered to occur together if they appear within the same "
+			"tooltip": "If 'thread' is selected, URLs are considered to co-occur if they appear within the same "
 					   "thread, even if they are in different posts."
 		}
 	}
@@ -54,22 +57,28 @@ class URLCoLinker(BasicProcessor):
 		with all posts containing the original query exactly, ignoring any
 		* or " in the query
 		"""
-
+		start_time = time.time()
 		# we use these to extract URLs and host names if needed
 		link_regex = re.compile(r"https?://[^\s\]()]+")
 		www_regex = re.compile(r"^www\.")
 		trailing_dot = re.compile(r"[.,)]$")
 
 		self.dataset.update_status("Reading source file")
+		update_on_item = max(10, int(self.source_dataset.num_rows / 100))
 
 		links = {}
 		processed = 0
+		# create an undirected network
 		network = nx.Graph()
 
-		for post in self.iterate_items(self.source_file):
+		for post in self.source_dataset.iterate_items(self):
+			if self.interrupted:
+				raise ProcessorInterruptedException("Interrupted while collecting links")
+
 			processed += 1
-			if processed % 50 == 0:
+			if processed % update_on_item == 0:
 				self.dataset.update_status("Extracting URLs from item %i" % processed)
+				self.dataset.update_progress(processed / (self.source_dataset.num_rows * 2))
 
 			if not post["body"]:
 				continue
@@ -112,28 +121,37 @@ class URLCoLinker(BasicProcessor):
 
 		# create co-link pairs from all links per co-link unit (thread or post)
 		self.dataset.update_status("Finding common URLs")
-		for unit_id in links:
-			post_links = links[unit_id]
+		# # This is faster than the below for loop, but apparently uses more memory (crashing on giant datasets where the for loop does not), plus we're only talking about seconds per million edges
+		# [network.add_edge(from_link, to_link) for post_links in links.values() if len(post_links) > 1 for i, from_link in enumerate(post_links) for to_link in post_links[i + 1:]]
+
+		update_on_item = max(int(len(links) / 100), 1)
+		for i, post_links in enumerate(links.values()):
+			if i % update_on_item == 0:
+				self.dataset.update_status("Collecting URL links from item %i" % i)
+				self.dataset.update_progress((self.source_dataset.num_rows + i) / (self.source_dataset.num_rows * 2))
 
 			# ignore single links (which, of course, are not co-linked with
 			# any other links)
 			if len(post_links) <= 1:
 				continue
 
-			# create co-link pairs from link sets
-			pairs = set()
-			for from_link in post_links:
-				# keep track of all URLs so we can easily write the node
-				# list later
-				if from_link not in network.nodes():
-					network.add_node(from_link)
+			while post_links:
+				from_link = post_links.pop()
 
 				for to_link in post_links:
-					if to_link not in network.nodes():
-						network.add_node(to_link)
+					if self.interrupted:
+						raise ProcessorInterruptedException("Interrupted while creating network edges")
 
 					network.add_edge(from_link, to_link)
 
+		self.dataset.update_status(f"Network has {len(network.nodes)} and {len(network.edges)} edges")
+		self.dataset.log(f"time elapsed: {time.time() - start_time:.2f} seconds")
 		self.dataset.update_status("Writing network file")
+		if psutil.virtual_memory().percent > 95:
+			self.dataset.update_status("WARNING: memory usage about 95%; network may fail...")
+			self.log.warning(f"Memory usage above 95%: network dataset {self.dataset.key}")
+			#TODO: add perhaps kill the processor? It's frustrating that we can collect the data but not write it!
 		nx.write_gexf(network, self.dataset.get_results_path())
+		self.dataset.log(f"time to complete: {time.time() - start_time:.2f} seconds")
 		self.dataset.finish(len(network.nodes))
+

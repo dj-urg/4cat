@@ -8,7 +8,7 @@ import re
 
 from bs4 import BeautifulSoup
 
-from backend.abstract.search import Search
+from backend.lib.search import Search
 from common.lib.helpers import convert_to_int, strip_tags, UserInput
 from common.lib.exceptions import QueryParametersException, ProcessorInterruptedException
 
@@ -24,6 +24,8 @@ class SearchDouban(Search):
     title = "Douban Search"  # title displayed in UI
     description = "Scrapes group posts from Douban for a given set of groups"  # description displayed in UI
     extension = "csv"  # extension of result file, used internally and in UI
+    is_local = False    # Whether this datasource is locally scraped
+    is_static = False   # Whether this datasource is still updated
 
     # not available as a processor for existing datasets
     accepts = [None]
@@ -113,7 +115,7 @@ class SearchDouban(Search):
                         "Got response code %i for group %s. Continuing with next group..." % (request.status_code, group))
                     break
 
-                self.dataset.update_status("Scraping group %s...")
+                self.dataset.update_status("Scraping group %s..." % group)
 
                 # parse the HTML and get links to individual topics, as well as group name
                 overview_page = BeautifulSoup(request.text, 'html.parser')
@@ -130,8 +132,14 @@ class SearchDouban(Search):
                     topic_url = topic.find("a").get("href")
                     topic_is_elite = "yes" if bool(topic.select_one(".elite_topic_lable")) else "no"
                     topic_id = topic_url.split("/topic/").pop().split("/")[0]
-                    topic_updated = int(
-                        datetime.datetime.strptime(topic.select_one(".time").text, "%m-%d %H:%M").timestamp())
+
+                    # date can be in either of two formats, with or without time
+                    try:
+                        topic_updated = int(
+                            datetime.datetime.strptime(topic.select_one(".time").text, "%m-%d %H:%M").timestamp())
+                    except ValueError:
+                        topic_updated = int(
+                            datetime.datetime.strptime(topic.select_one(".time").text, "%Y-%m-%d").timestamp())
 
                     # if a date range is given, ignore topics outside of it
                     if start and topic_updated < start:
@@ -194,7 +202,7 @@ class SearchDouban(Search):
                             "author_id":
                                 comment.select_one(".user-face a").get("href").split("/people/").pop().split("/")[0],
                             "author_avatar": comment.select_one(".user-face img").get("src").replace("/u", "/ul"),
-                            "timestamp": int(datetime.datetime.strptime(comment.select_one(".pubtime").text,
+                            "timestamp": int(datetime.datetime.strptime(comment.select_one(".pubtime").text.strip()[:19],
                                                                         "%Y-%m-%d %H:%M:%S").timestamp()),
                             "likes": convert_to_int(
                                 re.sub(r"[^0-9]", "", comment.select_one(".comment-vote.lnk-fav").text), 0),

@@ -11,7 +11,7 @@ from sklearn.decomposition import PCA, TruncatedSVD
 
 from gensim.models import KeyedVectors
 
-from backend.abstract.processor import BasicProcessor
+from backend.lib.processor import BasicProcessor
 from common.lib.helpers import UserInput, convert_to_int, get_4cat_canvas
 from common.lib.exceptions import ProcessorInterruptedException
 
@@ -94,7 +94,7 @@ class HistWordsVectorSpaceVisualiser(BasicProcessor):
     }
 
     @classmethod
-    def is_compatible_with(cls, module=None):
+    def is_compatible_with(cls, module=None, user=None):
         """
         Allow processor on token sets
 
@@ -137,15 +137,15 @@ class HistWordsVectorSpaceVisualiser(BasicProcessor):
                 shutil.rmtree(staging_area)
                 raise ProcessorInterruptedException("Interrupted while processing word embedding models")
 
-            model = KeyedVectors.load(str(model_file)).wv
+            model = KeyedVectors.load(str(model_file))
             models[model_file.stem] = model
             if vector_size is None:
                 vector_size = model.vector_size  # needed later for dimensionality reduction
 
             if common_vocab is None:
-                common_vocab = set(model.vocab.keys())
+                common_vocab = set(model.key_to_index.keys())
             else:
-                common_vocab &= set(model.vocab.keys())  # intersect
+                common_vocab &= set(model.key_to_index.keys())  # intersect
 
         if not common_vocab:
             self.dataset.update_status("No vocabulary common across all models, cannot diachronically chart words", is_final=True)
@@ -155,7 +155,7 @@ class HistWordsVectorSpaceVisualiser(BasicProcessor):
         # this should make filtering for common words a bit faster further down
         self.dataset.update_status("Sorting vocabulary")
         common_vocab = list(common_vocab)
-        common_vocab.sort(key=lambda w: sum([model.vocab[w].count for model in models.values()]), reverse=True)
+        common_vocab.sort(key=lambda w: sum([model.get_vecattr(w, "count") for model in models.values()]), reverse=True)
 
         # initial boundaries of 2D space (to be adjusted later based on t-sne
         # outcome)
@@ -181,7 +181,7 @@ class HistWordsVectorSpaceVisualiser(BasicProcessor):
             self.dataset.update_status("Finding similar words in model '%s'" % model_name)
 
             for query in input_words:
-                if query not in model.vocab:
+                if query not in model.key_to_index:
                     self.dataset.update_status("Query '%s' was not found in model %s; cannot find nearest neighbours." % (query, model_name), is_final=True)
                     self.dataset.finish(0)
                     return
@@ -239,7 +239,10 @@ class HistWordsVectorSpaceVisualiser(BasicProcessor):
             # parameters taken from Hamilton et al.
             # https://github.com/williamleif/histwords/blob/master/viz/common.py
             tsne = TSNE(n_components=2, random_state=0, learning_rate=150, init="pca")
-            vectors = tsne.fit_transform(vectors)
+            try:
+                vectors = tsne.fit_transform(vectors)
+            except ValueError:
+                self.dataset.finish_with_error("Insufficient data to reduce to 2D. The word embeddings model may be too small to visualise properly.")
         elif reduction_method == "TruncatedSVD":
             # standard sklearn parameters made explicit
             svd = TruncatedSVD(n_components=2, algorithm="randomized", n_iter=5, random_state=0)

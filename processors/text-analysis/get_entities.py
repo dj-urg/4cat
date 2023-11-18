@@ -2,16 +2,13 @@
 Extract nouns from SpaCy NLP docs.
 
 """
-
-import csv
 import pickle
-import shutil
 import spacy
 
 from collections import Counter
 from spacy.tokens import DocBin
 from common.lib.helpers import UserInput
-from backend.abstract.processor import BasicProcessor
+from backend.lib.processor import BasicProcessor
 from common.lib.exceptions import ProcessorInterruptedException
 
 __author__ = "Sal Hagen"
@@ -27,7 +24,8 @@ class ExtractNouns(BasicProcessor):  # TEMPORARILY DISABLED
     type = "get-entities"  # job type ID
     category = "Text analysis"  # category
     title = "Extract named entities"  # title displayed in UI
-    description = "Get the prediction of various named entities from a text, ranked on frequency. Be sure to have selected \"Named Entity Recognition\" in the previous module. Currently only available for datasets with less than 25.000 items."  # description displayed in UI
+    description = "Retrieve named entities detected by SpaCy, ranked on frequency. Be sure to have selected " \
+                  "\"Named Entity Recognition\" in the previous module." # description displayed in UI
     extension = "csv"  # extension of result file, used internally and in UI
 
     options = {
@@ -64,11 +62,11 @@ class ExtractNouns(BasicProcessor):  # TEMPORARILY DISABLED
     ]
 
     @classmethod
-    def is_compatible_with(cls, module=None):
+    def is_compatible_with(cls, module=None, user=None):
         """
         Allow processor on linguistic feature data
 
-        :param module: Dataset or processor to determine compatibility with
+        :param module: Module to determine compatibility with
         """
 
         return module.type == "linguistic-features"
@@ -82,12 +80,6 @@ class ExtractNouns(BasicProcessor):  # TEMPORARILY DISABLED
         # Validate whether the user enabled the right parameters.
         if "ner" not in self.source_dataset.parameters["enable"]:
             self.dataset.update_status("Enable \"Named entity recognition\" in previous module")
-            self.dataset.finish(0)
-            return
-
-        if self.source_dataset.num_rows > 25000:
-            self.dataset.update_status(
-                "Named entity recognition is only available for datasets smaller than 25.000 items.")
             self.dataset.finish(0)
             return
 
@@ -123,9 +115,13 @@ class ExtractNouns(BasicProcessor):  # TEMPORARILY DISABLED
 
             if li_entities:
 
-                # Also add the data to the original csv file, if indicated.
+                # Also add the data to the original file, if indicated.
                 if self.parameters.get("overwrite"):
-                    self.update_parent(li_entities)
+                    self.add_field_to_parent(field_name='named_entities',
+                                             # Format like "Apple:ORG, Gates:PERSON, ..." and add to the row
+                                             new_data=[", ".join([":".join(post_entities) for post_entities in entity]) for entity in li_entities],
+                                             which_parent=self.dataset.top_parent(),
+                                             update_existing=True)
 
                 all_entities = []
                 # Convert to lower and filter out one-letter words. Join the words with the entities so we can group easily.
@@ -149,50 +145,6 @@ class ExtractNouns(BasicProcessor):  # TEMPORARILY DISABLED
                 self.dataset.update_status("Finished, but no entities were extracted.")
                 self.dataset.finish(0)
 
-    def update_parent(self, li_entities):
-        """
-        Update the original dataset with an "entities" column
-
-        """
-
-        self.dataset.update_status("Adding entities the source file")
-
-        # Get the initial dataset path
-        top_path = self.dataset.top_parent().get_results_path()
-
-        # Get a temporary path where we can store the data
-        tmp_path = self.dataset.get_staging_area()
-        tmp_file_path = tmp_path.joinpath(top_path.name)
-
-        count = 0
-
-        # Get field names
-        fieldnames = self.get_item_keys(top_path)
-        if "entities" not in fieldnames:
-            fieldnames.append("entities")
-
-        # Iterate through the original dataset and add values to a new "entities" column
-        self.dataset.update_status("Writing csv with entities.")
-        with tmp_file_path.open("w", encoding="utf-8", newline="") as output:
-
-            writer = csv.DictWriter(output, fieldnames=fieldnames)
-            writer.writeheader()
-
-            for post in self.iterate_items(top_path):
-                # Format like "Apple ORG, Gates PERSON, ..." and add to the row
-                pos_tags = ", ".join([":".join(post_entities) for post_entities in li_entities[count]])
-                post["entities"] = pos_tags
-                writer.writerow(post)
-                count += 1
-
-        # Replace the source file path with the new file
-        shutil.copy(str(tmp_file_path), str(top_path))
-
-        # delete temporary files and folder
-        shutil.rmtree(tmp_path)
-
-        self.dataset.update_status("Parent dataset updated.")
-
     @classmethod
     def get_options(cls, parent_dataset=None, user=None):
         """
@@ -207,7 +159,7 @@ class ExtractNouns(BasicProcessor):  # TEMPORARILY DISABLED
         :return dict:
         """
         options = cls.options
-        if parent_dataset and parent_dataset.top_parent().get_results_path().suffix == ".csv":
+        if parent_dataset and parent_dataset.top_parent().get_results_path().suffix in [".csv", ".ndjson"]:
             options["overwrite"] = {
                 "type": UserInput.OPTION_TOGGLE,
                 "default": False,

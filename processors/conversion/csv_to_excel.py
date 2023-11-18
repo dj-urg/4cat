@@ -3,8 +3,7 @@ Convert a CSV file to Excel-compatible CSV
 """
 import csv
 
-from backend.abstract.processor import BasicProcessor
-from common.lib.exceptions import ProcessorInterruptedException
+from backend.lib.processor import BasicProcessor
 
 __author__ = "Stijn Peeters"
 __credits__ = ["Stijn Peeters"]
@@ -20,18 +19,23 @@ class ConvertCSVToMacExcel(BasicProcessor):
 	type = "convert-csv-excel"  # job type ID
 	category = "Conversion"  # category
 	title = "Convert to Excel-compatible CSV"  # title displayed in UI
-	description = "Convert a CSV file to a format that is compatible with Microsoft Excel."  # description displayed in UI
+	description = "Change a CSV file so it works with Microsoft Excel."  # description displayed in UI
 	extension = "csv"  # extension of result file, used internally and in UI
 
 	@classmethod
-	def is_compatible_with(cls, module=None):
+	def is_compatible_with(cls, module=None, user=None):
 		"""
 		Determine if processor is compatible with dataset
 
-		:param module: Dataset or processor to determine compatibility with
+		:param module: Module to determine compatibility with
 		"""
-		
-		return module.get_extension() in ["csv", "ndjson"] and module.type != cls.type
+		if module.type == cls.type:
+			return False
+
+		if module.get_extension() == "csv":
+			return True
+		elif module.get_extension() == "ndjson":
+			return hasattr(module.get_own_processor(), "map_item")
 
 	def process(self):
 		"""
@@ -55,16 +59,12 @@ class ConvertCSVToMacExcel(BasicProcessor):
 
 		# recreate CSV file with the new dialect
 		with self.dataset.get_results_path().open("w") as output:
-			fieldnames = self.get_item_keys(self.source_file)
+			fieldnames = self.source_dataset.get_item_keys(self)
 
 			writer = csv.DictWriter(output, fieldnames=fieldnames, dialect="excel-mac")
 			writer.writeheader()
 
-			for post in self.iterate_items(self.source_file):
-				# stop processing if worker has been asked to stop
-				if self.interrupted:
-					raise ProcessorInterruptedException("Interrupted while processing CSV file")
-
+			for post in self.source_dataset.iterate_items(self):
 				writer.writerow(post)
 				posts += 1
 
@@ -72,3 +72,21 @@ class ConvertCSVToMacExcel(BasicProcessor):
 		# done!
 		self.dataset.update_status("Finished.")
 		self.dataset.finish(num_rows=posts)
+
+	@classmethod
+	def get_csv_parameters(cls, csv_library):
+		"""
+		Returns CSV parameters if they are changed from 4CAT's defaults.
+		"""
+		csv_library.register_dialect("excel-mac",
+			delimiter = ";",
+			doublequote = True,
+			escapechar = None,
+			lineterminator = "\r\n",
+			quotechar = '"',
+			quoting = csv.QUOTE_MINIMAL,
+			skipinitialspace = False,
+			strict = False
+		)
+
+		return {"dialect": "excel-mac"}

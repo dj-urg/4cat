@@ -3,7 +3,7 @@ Generate ranking per hateful word
 """
 import datetime
 
-from backend.abstract.processor import BasicProcessor
+from backend.lib.processor import BasicProcessor
 from common.lib.helpers import UserInput, convert_to_int
 
 __author__ = "Stijn Peeters"
@@ -22,16 +22,16 @@ class HatebaseRanker(BasicProcessor):
 	"""
 	type = "hatebase-frequencies"  # job type ID
 	category = "Post metrics"  # category
-	title = "Top hateful phrases"  # title displayed in UI
-	description = "Count frequencies for hateful words and phrases found in the dataset and aggregate the results, sorted by most-occurring value. Optionally results may be counted per period."  # description displayed in UI
+	title = "Extract top hateful phrases"  # title displayed in UI
+	description = "Count frequencies for hateful words and phrases found in the dataset and rank the results (overall or per timeframe)."  # description displayed in UI
 	extension = "csv"  # extension of result file, used internally and in UI
 
 	@classmethod
-	def is_compatible_with(cls, module=None):
+	def is_compatible_with(cls, module=None, user=None):
 		"""
 		Allow processor on previous Hatebase analyses
 
-		:param module: Dataset or processor to determine compatibility with
+		:param module: Module to determine compatibility with
 		"""
 		return module.type == "hatebase-data"
 
@@ -42,9 +42,9 @@ class HatebaseRanker(BasicProcessor):
 			"type": UserInput.OPTION_CHOICE,
 			"default": "all",
 			"options": {
-				"all": "Ambigous and unambiguous",
-				"ambiguous": "Ambiguous terms only",
-				"unambiguous": "Unambiguous terms only"
+				"all": "Ambigous and unambiguous hate terms",
+				"ambiguous": "Ambiguous hate terms terms only",
+				"unambiguous": "Unambiguous hate terms terms only"
 			},
 			"help": "Terms to consider"
 		},
@@ -57,10 +57,10 @@ class HatebaseRanker(BasicProcessor):
 		"top-style": {
 			"type": UserInput.OPTION_CHOICE,
 			"default": "per-item",
-			"options": {"per-item": "per interval (separate ranking per interval)",
-						"overall": "overall (per-interval ranking for overall top items)"},
+			"options": {"per-item": "per timeframe (separate ranking per timeframe)",
+						"overall": "overall (only include overall top items in the timeframe)"},
 			"help": "Determine top items",
-			"tooltip": "'Overall' will first determine the most prevalent items across all intervals, then calculate top items per interval using this as a shortlist."
+			"tooltip": "'Overall' will first determine the top values across all timeframes, and then check how often these occur per timeframe."
 		},
 		"top": {
 			"type": UserInput.OPTION_TEXT,
@@ -89,7 +89,7 @@ class HatebaseRanker(BasicProcessor):
 		overall_top = {}
 		interval_top = {}
 
-		for post in self.iterate_items(self.source_file):
+		for post in self.source_dataset.iterate_items(self):
 			# determine where to put this data
 			if timeframe == "all":
 				time_unit = "overall"

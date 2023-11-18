@@ -4,9 +4,7 @@ Get regular and 'debate' thread metadata
 import datetime
 import time
 
-from backend.abstract.processor import BasicProcessor
-
-import config
+from backend.lib.processor import BasicProcessor
 
 __author__ = "Sal Hagen"
 __credits__ = ["Sal Hagen"]
@@ -33,15 +31,13 @@ class DebateMetrics(BasicProcessor):
 	extension = "csv"  # extension of result file, used internally and in UI
 
 	@classmethod
-	def is_compatible_with(cls, module=None):
+	def is_compatible_with(cls, module=None, user=None):
 		"""
 		Allow processor if dataset is a 'top level' dataset
 
-		:param module: Dataset or processor to determine compatibility with
+		:param module: Module to determine compatibility with
 		"""
-		if module.is_dataset():
-			return module.parameters.get("datasource") in ("4chan", "8chan", "8kun")
-		return False
+		return module.parameters.get("datasource") in ("fourchan", "eightchan", "eightkun")
 
 	def process(self):
 		"""
@@ -56,7 +52,7 @@ class DebateMetrics(BasicProcessor):
 		board = self.source_dataset.parameters["board"]
 
 		self.dataset.update_status("Reading source file")
-		for post in self.iterate_items(self.source_file):
+		for post in self.source_dataset.iterate_items(self):
 			if post["thread_id"] not in threads:
 				threads[post["thread_id"]] = {
 					"subject": post["subject"],
@@ -83,8 +79,6 @@ class DebateMetrics(BasicProcessor):
 			"subject": threads[thread_id]["subject"],
 			"num_posts": threads[thread_id]["count"],
 			"num_images": threads[thread_id]["images"],
-			"preview_url": "http://" + config.FlaskConfig.SERVER_NAME + "/api/" + datasource + "/" + board + "/thread/" + str(
-				thread_id) + ".json?format=html",
 			"op_replies": threads[thread_id]["op_length"]
 			# "reply_amount": ,
 			# "active_users": ,

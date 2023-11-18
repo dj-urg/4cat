@@ -2,8 +2,8 @@ import socket
 import time
 import json
 
-import config
-from backend.abstract.worker import BasicWorker
+from common.config_manager import config
+from backend.lib.worker import BasicWorker
 
 
 class InternalAPI(BasicWorker):
@@ -13,8 +13,10 @@ class InternalAPI(BasicWorker):
 	type = "api"
 	max_workers = 1
 
-	host = config.API_HOST
-	port = config.API_PORT
+	ensure_job = {"remote_id": "localhost"}
+
+	host = config.get('API_HOST')
+	port = config.get('API_PORT')
 
 	def work(self):
 		"""
@@ -58,8 +60,8 @@ class InternalAPI(BasicWorker):
 				self.manager.log.error("OS refused listening at port %i! Local API not available." % self.port)
 				return
 
-		server.listen(5)
-		server.settimeout(5)
+		server.listen()
+		server.settimeout(2)
 		self.manager.log.info("Local API listening for requests at %s:%s" % (self.host, self.port))
 
 		# continually listen for new connections
@@ -231,6 +233,15 @@ class InternalAPI(BasicWorker):
 
 					queue[job["jobtype"]] += 1
 				else:
+					if hasattr(worker, "dataset") and worker.dataset:
+						running_key = worker.dataset.key
+						running_user = worker.dataset.creator
+						running_parent = worker.dataset.top_parent().key
+					else:
+						running_key = None
+						running_user = None
+						running_parent = None
+
 					running.append({
 						"type": job["jobtype"],
 						"is_claimed": job["timestamp_claimed"] > 0,
@@ -238,9 +249,9 @@ class InternalAPI(BasicWorker):
 						"is_processor": hasattr(worker, "dataset"),
 						"is_recurring": (int(job["interval"]) > 0),
 						"is_maybe_crashed": job["timestamp_claimed"] > 0 and not worker,
-						"dataset_key": worker.dataset.key if hasattr(worker, "dataset") else None,
-						"dataset_user": worker.dataset.parameters.get("user", None) if hasattr(worker, "dataset") else None,
-						"dataset_parent_key": worker.dataset.top_parent().key if hasattr(worker, "dataset") else None,
+						"dataset_key": running_key,
+						"dataset_user": running_user,
+						"dataset_parent_key": running_parent,
 						"timestamp_queued": job["timestamp"],
 						"timestamp_claimed": job["timestamp_lastclaimed"]
 					})

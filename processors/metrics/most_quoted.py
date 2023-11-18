@@ -4,7 +4,7 @@ Example post-processor worker
 import csv
 import re
 
-from backend.abstract.processor import BasicProcessor
+from backend.lib.processor import BasicProcessor
 
 __author__ = "Stijn Peeters"
 __credits__ = ["Stijn Peeters"]
@@ -19,20 +19,18 @@ class QuoteRanker(BasicProcessor):
 	"""
 	type = "quote-ranker"  # job type ID
 	category = "Post metrics" # category
-	title = "Sort by most quoted"  # title displayed in UI
-	description = "Sort posts by how often they were quoted by other posts in the data set. Post IDs may be correlated and triangulated with the full results set."  # description displayed in UI
+	title = "Sort by most replied-to"  # title displayed in UI
+	description = "Sort posts by how often they were replied to by other posts in the dataset."  # description displayed in UI
 	extension = "csv"  # extension of result file, used internally and in UI
 
 	@classmethod
-	def is_compatible_with(cls, module=None):
+	def is_compatible_with(cls, module=None, user=None):
 		"""
 		Allow processor on chan datasets
 
-		:param module: Dataset or processor to determine compatibility with
+		:param module: Module to determine compatibility with
 		"""
-		if module.is_dataset():
-			return module.parameters.get("datasource") in ("4chan", "8chan", "8kun")
-		return False
+		return module.parameters.get("datasource") in ("fourchan", "eightchan", "eightkun")
 
 
 	def process(self):
@@ -47,7 +45,7 @@ class QuoteRanker(BasicProcessor):
 		link = re.compile(r">>([0-9]+)")
 
 		self.dataset.update_status("Reading source file")
-		for post in self.iterate_items(self.source_file):
+		for post in self.source_dataset.iterate_items(self):
 			quotes = re.findall(link, post["body"])
 			if quotes:
 				if quotes[0] not in quoted:
@@ -76,5 +74,5 @@ class QuoteRanker(BasicProcessor):
 				post["num_quoted"] = quoted[id]
 				writer.writerow(post)
 
-		self.dataset.update_status("Finished")
+		self.dataset.update_status("Sorted posts by most-replied to")
 		self.dataset.finish(len(most_quoted))

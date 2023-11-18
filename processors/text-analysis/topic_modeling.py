@@ -3,10 +3,11 @@ Create topic clusters based on datasets
 """
 
 from common.lib.helpers import UserInput
-from backend.abstract.processor import BasicProcessor
+from backend.lib.processor import BasicProcessor
 from common.lib.exceptions import ProcessorInterruptedException
 
 import json, pickle
+import shutil
 
 from sklearn.feature_extraction.text import CountVectorizer, TfidfVectorizer
 from sklearn.decomposition import LatentDirichletAllocation
@@ -24,7 +25,9 @@ class TopicModeler(BasicProcessor):
     type = "topic-modeller"  # job type ID
     category = "Text analysis"  # category
     title = "Generate topic models"  # title displayed in UI
-    description = "Creates topic models per token set using Latent Dirichlet Allocation (LDA). For a given number of topics, tokens are assigned a relevance weight per topic, which can be used to find clusters of related words."  # description displayed in UI
+    description = "Creates topic models per tokenset using Latent Dirichlet Allocation (LDA). " \
+                  "For a given number of topics, tokens are assigned a relevance weight per topic, " \
+                  "which can be used to find clusters of related words."  # description displayed in UI
     extension = "zip"  # extension of result file, used internally and in UI
 
     options = {
@@ -70,11 +73,11 @@ class TopicModeler(BasicProcessor):
     ]
 
     @classmethod
-    def is_compatible_with(cls, module=None):
+    def is_compatible_with(cls, module=None, user=None):
         """
         Allow processor on token sets
 
-        :param module: Dataset or processor to determine compatibility with
+        :param module: Module to determine compatibility with
         """
         return module.type == "tokenise-posts"
 
@@ -92,11 +95,20 @@ class TopicModeler(BasicProcessor):
         # prepare temporary location for model files
         staging_area = self.dataset.get_staging_area()
 
+        model_metadata = {'parameters': self.parameters}
         # go through all archived token sets and vectorise them
         index = 0
         for token_file in self.iterate_archive_contents(self.source_file):
+            # Check for and open token metadata file
+            if token_file.name == '.token_metadata.json':
+                # Copy the token metadata into our staging area
+                shutil.copyfile(token_file, staging_area.joinpath(".token_metadata.json"))
+                continue
+
             index += 1
             self.dataset.update_status("Processing token set %i (%s)" % (index, token_file.stem))
+            self.dataset.update_progress(index / self.source_dataset.num_rows)
+
             if self.interrupted:
                 raise ProcessorInterruptedException("Interrupted while topic modeling")
 
@@ -105,17 +117,17 @@ class TopicModeler(BasicProcessor):
                 tokens = json.load(binary_tokens)
 
             self.dataset.update_status("Vectorising token set '%s'" % token_file.stem)
-            vectoriser = vectoriser_class(tokenizer=lambda token: token, lowercase=False, min_df=min_df, max_df=max_df)
+            vectoriser = vectoriser_class(tokenizer=token_helper, lowercase=False, min_df=min_df, max_df=max_df)
 
             try:
                 vectors = vectoriser.fit_transform(tokens)
             except ValueError as e:
                 # 'no words left' after pruning, so nothing to model with
-                self.dataset.update_status(e, is_final=True)
+                self.dataset.update_status(str(e), is_final=True)
                 self.dataset.finish(0)
                 return
 
-            features = vectoriser.get_feature_names()
+            features = vectoriser.get_feature_names_out()
 
             self.dataset.update_status("Fitting token clusters for token set '%s'" % token_file.stem)
             if self.interrupted:
@@ -133,5 +145,45 @@ class TopicModeler(BasicProcessor):
             with staging_area.joinpath("%s.model" % token_file.stem).open("wb") as outfile:
                 pickle.dump(model, outfile)
 
+            # Storing vectors and vectoriser for LDA visualisation
+            self.dataset.update_status("Storing vectors and vectoriser for token set '%s'" % token_file.stem)
+            with staging_area.joinpath("%s.vectors" % token_file.stem).open("wb") as outfile:
+                pickle.dump(vectors, outfile)
+
+            with staging_area.joinpath("%s.vectoriser" % token_file.stem).open("wb") as outfile:
+                pickle.dump(vectoriser, outfile)
+
+            # Collect Metadata
+            model_topics = {}
+            for topic_index, topic in enumerate(model.components_):
+                model_features = {features[i]: weight for i, weight in enumerate(topic)}
+                top_five_features = {f: model_features[f] for f in
+                                sorted(model_features, key=lambda k: model_features[k], reverse=True)[:5]}
+                model_topics[topic_index] = {
+                                            'topic_index': topic_index,
+                                            'top_five_features': top_five_features,
+                                            }
+            model_metadata[token_file.name] = {
+                                          'model_file': "%s.model" % token_file.stem,
+                                          'feature_file': "%s.features" % token_file.stem,
+                                          'source_token_file': token_file.name,
+                                          'model_topics': model_topics,
+                                          }
+
+            # Make predictions
+            # This could be done in another processor, but we have the model right here
+            predicted_topics = model.transform(vectors)
+            model_metadata[token_file.name]['predictions'] = {i:{topic:unnormalized_distribution for topic, unnormalized_distribution in enumerate(doc_predictions)} for i, doc_predictions in enumerate(predicted_topics)}
+
+        # Save the model metadata in our staging area
+        with staging_area.joinpath(".model_metadata.json").open("w", encoding="utf-8") as outfile:
+            json.dump(model_metadata, outfile)
+
         self.dataset.update_status("Compressing generated model files")
         self.write_archive_and_finish(staging_area)
+
+def token_helper(token):
+    """
+    pickle requires named functions
+    """
+    return token

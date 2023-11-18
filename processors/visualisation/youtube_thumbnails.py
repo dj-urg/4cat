@@ -4,13 +4,12 @@ Get YouTube metadata from video links posted
 import time
 import urllib.request
 
-import config
-
 from apiclient.discovery import build
 
-from backend.abstract.processor import BasicProcessor
+from backend.lib.processor import BasicProcessor
 from common.lib.exceptions import ProcessorInterruptedException
 from common.lib.helpers import get_yt_compatible_ids
+from common.config_manager import config
 
 __author__ = "Sal Hagen"
 __credits__ = ["Sal Hagen"]
@@ -27,14 +26,14 @@ class YouTubeThumbnails(BasicProcessor):
 	type = "youtube-thumbnails"  # job type ID
 	category = "Cross-platform" # category
 	title = "Download YouTube thumbnails"  # title displayed in UI
-	description = "Download YouTube video thumbnails."  # description displayed in UI
+	description = "Downloads the thumbnails of YouTube videos and stores it in a zip archive."  # description displayed in UI
 	extension = "zip"  # extension of result file, used internally and in UI
 	
 	max_retries = 3
 	sleep_time = 10
 
 	@classmethod
-	def is_compatible_with(cls, module=None):
+	def is_compatible_with(cls, module=None, user=None):
 		"""
 		Allow processor on YouTube metadata sets
 
@@ -49,7 +48,7 @@ class YouTubeThumbnails(BasicProcessor):
 		"""
 		self.dataset.update_status("Extracting YouTube links")
 		video_ids = set()
-		for youtube_video in self.iterate_items(self.source_file):
+		for youtube_video in self.source_dataset.iterate_items(self):
 			video_ids.add(youtube_video["id"])
 
 		self.dataset.update_status("Downloading thumbnails")
@@ -65,8 +64,8 @@ class YouTubeThumbnails(BasicProcessor):
 		results_path = self.dataset.get_staging_area()
 
 		# Use YouTubeDL and the YouTube API to request video data
-		youtube = build(config.YOUTUBE_API_SERVICE_NAME, config.YOUTUBE_API_VERSION,
-											developerKey=config.YOUTUBE_DEVELOPER_KEY)
+		youtube = build(self.config.get('api.youtube.name'), self.config.get('api.youtube.version'),
+											developerKey=self.config.get('api.youtube.key'))
 		
 		ids_list = get_yt_compatible_ids(video_ids)
 		retries = 0
@@ -105,6 +104,7 @@ class YouTubeThumbnails(BasicProcessor):
 					urllib.request.urlretrieve(thumb_url, save_path)
 
 			self.dataset.update_status("Downloaded thumbnails for " + str(i * 50) + "/" + str(len(video_ids)))
+			self.dataset.update_progress(i / len(ids_list))
 
 		# create zip of archive and delete temporary files and folder
 		self.dataset.update_status("Compressing results into archive")

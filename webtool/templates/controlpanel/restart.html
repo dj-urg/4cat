@@ -1,0 +1,89 @@
+{% extends "controlpanel/layout.html" %}
+
+{% block title %}Restart/Upgrade 4CAT{% endblock %}
+{% block body_class %}plain-page frontpage admin {{ body_class }}{% endblock %}
+{% block subbreadcrumbs %}{% set navigation.sub = "restart" %}{% endblock %}
+
+{% block body %}
+    <article class="small">
+        <section>
+            <h2><span>Restart/Upgrade 4CAT</span></h2>
+
+            {% for notice in flashes %}
+                <p class="form-notice">{{ notice|safe }}</p>
+            {% endfor %}
+
+            <p>Use the buttons below to restart or upgrade 4CAT. Restarting will stop and start the backend daemon and
+                attempt to trigger a restart of the web interface.</p>
+
+            <p>Upgrading will pull the latest release from the 4CAT GitHub repository (you can configure a different URL
+                in the 4CAT settings). If the release is newer than the code currently running, it will be installed and
+                4CAT will be upgraded to the newest version. Afterwards 4CAT will be restarted and if necessary the
+                relevant upgrade scripts will be run with default settings.</p>
+
+            <p>Restarting is relatively safe, upgrading always has a risk of breaking things. The web interface may be
+                unresponsive during the process. Do not refresh the page until it is finished. This may take a while.
+                <strong>We recommend making a backup before upgrading.</strong></p>
+
+            <p>Don't upgrade on Friday afternoons :-)</p>
+
+            <p>You are currently running 4CAT version <code>{{ current_version }}</code>.<br>
+                The latest release available is <code>{{ tagged_version }}</code>.</p>
+
+            <p>{% if in_progress %}
+                    A restart or upgrade is currently in progress.
+                {% elif can_upgrade %}
+                    You can upgrade 4CAT{% if release_notes %}. Make sure to read the <a href="{{ release_notes }}">release notes</a> before you do{% endif %}.
+                {% else %}
+                    No upgrades are currently available.
+                {% endif %}</p>
+
+            <form action="{{ url_for("trigger_restart") }}" method="POST">
+            <ul class="button-container">
+                <li><button name="action" value="restart"{% if in_progress %} disabled="disabled"{% endif %}>
+                    <i class="fa fa-power-off" aria-hidden="true"></i> Restart back-end & front-end
+                </button></li>
+
+                <li><button name="action" value="restart-frontend"{% if in_progress %} disabled="disabled"{% endif %} data-url="{{ url_for("trigger_restart_frontend") }}">
+                    <i class="fa fa-power-off" aria-hidden="true"></i> Restart front-end only
+                </button></li>
+
+                {% if can_upgrade %}
+                    <li><button name="action" class="confirm-first" value="upgrade"{% if in_progress %} disabled="disabled"{% endif %}>
+                        <i class="fa fa-wrench" aria-hidden="true"></i> Upgrade (danger!)
+                    </button></li>
+                {% endif %}
+            </ul>
+            </form>
+        {% if __user_config("privileges.can_upgrade_to_dev") %}
+            <hr>
+        <form action="{{ url_for("trigger_restart") }}" method="POST">
+            <p>You can also upgrade to a development branch of the <a href="{{ __user_config("4cat.github_url") }}">
+                configured GitHub repository</a>. This way you can for example use new or experimental features
+                before they are officially released.</p>
+            <p><strong>WARNING:</strong> it is <em>very</em> easy to break your 4CAT by upgrading to a development
+            branch. Only use this if you know what you're doing. Don't say we didn't warn you! </p>
+            <div class="form-element">
+                <label for="update-branch">Branch</label>
+                <input type="text" name="branch" id="update-branch" value="master">
+            </div>
+
+            <div class="submit-container">
+                <button class="confirm-first" name="action" value="upgrade-to-branch"{% if in_progress %} disabled="disabled"{% endif %}>
+                    <i class="fa fa-explosion"></i> Update to branch
+                </button>
+            </div>
+        </form>
+        {% endif %}
+        </section>
+
+        <section>
+            <h2><span>Process log</span></h2>
+            <p>Below is the contents of <code>restart.log</code>. Check the timestamp at the top as this may also show
+                the log of a previous restart/upgrade attempt.</p>
+            <pre id="upgrade-log" class="content-container" data-source="{{ url_for("restart_log") }}" data-interval="3">
+                Process output will be logged here.
+            </pre>
+        </section>
+    </article>
+{% endblock %}

@@ -5,8 +5,7 @@ Make word clouds of columns with text and values
 
 from wordcloud import WordCloud
 
-import config
-from backend.abstract.processor import BasicProcessor
+from backend.lib.processor import BasicProcessor
 from common.lib.helpers import UserInput
 
 __author__ = "Sal Hagen"
@@ -26,7 +25,7 @@ class MakeWordCloud(BasicProcessor):
 	extension = "svg"
 
 	@classmethod
-	def is_compatible_with(cls, module=None):
+	def is_compatible_with(cls, module=None, user=None):
 		"""
 		Allow processor on rankable items
 
@@ -36,7 +35,7 @@ class MakeWordCloud(BasicProcessor):
 
 	@classmethod
 	def get_options(self, parent_dataset=None, user=None):
-		
+
 		options = {}
 		if not parent_dataset:
 			return options
@@ -63,11 +62,11 @@ class MakeWordCloud(BasicProcessor):
 				"max_words": {
 					"type": UserInput.OPTION_TEXT,
 					"default": 200,
-					"help": "Convert to lowercase?"
+					"help": "Max words to show"
 				}
 			}
 		return options
-		
+
 	def process(self):
 		"""
 		Render an SVG histogram/bar chart using a previous frequency analysis
@@ -95,7 +94,7 @@ class MakeWordCloud(BasicProcessor):
 			self.finish(0)
 			return
 
-		for post in self.iterate_items(self.source_file):
+		for post in self.source_dataset.iterate_items(self):
 
 			word = post[word_column]
 			if to_lower:
@@ -118,9 +117,9 @@ class MakeWordCloud(BasicProcessor):
 
 		self.dataset.update_status("Making word cloud.")
 		cloud = WordCloud(prefer_horizontal=1, background_color="rgba(255, 255, 255, 0)", mode="RGBA", color_func=lambda *args, **kwargs: (0,0,0), width=1600, height=1000, collocations=False, max_words=max_words).generate_from_frequencies(words)
-		
+
 		# Write to svg
-		cloud = cloud.to_svg(embed_font=True)
+		cloud = cloud.to_svg()
 		file = open(self.dataset.get_results_path(), "w")
 		file.write(cloud)
 		self.dataset.finish(1)

@@ -4,14 +4,11 @@ Load modules and datasources dynamically
 from pathlib import Path
 import importlib
 import inspect
-import config
 import pickle
 import sys
 import re
-import os
 
-from backend.abstract.worker import BasicWorker
-from backend.abstract.processor import BasicProcessor
+from common.config_manager import config
 
 
 class ModuleCollector:
@@ -29,6 +26,7 @@ class ModuleCollector:
     """
     ignore = []
     missing_modules = {}
+    log_buffer = None
 
     PROCESSOR = 1
     WORKER = 2
@@ -44,6 +42,8 @@ class ModuleCollector:
         Datasources are loaded first so that the datasource folders may be
         scanned for workers subsequently.
         """
+        # this can be flushed later once the logger is available
+        self.log_buffer = ""
 
         self.load_datasources()
         self.load_modules()
@@ -52,14 +52,39 @@ class ModuleCollector:
         # datasources, e.g. whether they have an associated search worker
         self.expand_datasources()
 
+        # cache module-defined config options for use by the config manager
+        module_config = {}
+        for worker in self.workers.values():
+            if hasattr(worker, "config") and type(worker.config) is dict:
+                module_config.update(worker.config)
+
+        with config.get("PATH_ROOT").joinpath("config/module_config.bin").open("wb") as outfile:
+            pickle.dump(module_config, outfile)
+
+        # load from cache
+        config.load_user_settings()
+
     @staticmethod
-    def is_4cat_class(object):
+    def is_4cat_class(object, only_processors=False):
         """
-        Determine if a module member is a Search class we can use
+        Determine if a module member is a worker class we can use
         """
+        # it would be super cool to just use issubclass() here!
+        # but that requires importing the classes themselves, which leads to
+        # circular imports
+        # todo: fix this because this sucks
+        # agreed - Dale
+        parent_classes = {"BasicWorker", "BasicProcessor", "Search", "SearchWithScope", "Search4Chan",
+                          "ProcessorPreset", "TwitterStatsBase", "BaseFilter", "TwitterAggregatedStats", "ColumnFilter",
+                          "BasicJSONScraper", "BoardScraper4chan", "ThreadScraper4chan"}
+        if only_processors:
+            # only allow processors
+            for worker_only_class in ["BasicWorker", "BasicJSONScraper", "BoardScraper4chan", "ThreadScraper4chan"]:
+                parent_classes.remove(worker_only_class)
+
         return inspect.isclass(object) and \
-               issubclass(object, BasicWorker) and \
-               object is not BasicWorker and \
+               parent_classes & set([f.__name__ for f in object.__bases__]) and \
+               object.__name__ not in("BasicProcessor", "BasicWorker") and \
                not inspect.isabstract(object)
 
     def load_modules(self):
@@ -73,11 +98,11 @@ class ModuleCollector:
         """
         # look for workers and processors in pre-defined folders and datasources
 
-        paths = [Path(config.PATH_ROOT, "processors"), Path(config.PATH_ROOT, "backend", "workers"),
+        paths = [Path(config.get('PATH_ROOT'), "processors"), Path(config.get('PATH_ROOT'), "backend", "workers"),
                  *[self.datasources[datasource]["path"] for datasource in self.datasources]]
 
-        root_match = re.compile(r"^%s" % re.escape(config.PATH_ROOT))
-        root_path = Path(config.PATH_ROOT)
+        root_match = re.compile(r"^%s" % re.escape(str(config.get('PATH_ROOT'))))
+        root_path = Path(config.get('PATH_ROOT'))
 
         for folder in paths:
             # loop through folders, and files in those folders, recursively
@@ -87,19 +112,24 @@ class ModuleCollector:
                 module_name = ".".join(file.parts[len(root_path.parts):-1] + (file.stem,))
 
                 # check if we've already loaded this module
-                if module_name in sys.modules or module_name in self.ignore:
+                if module_name in self.ignore:
                     continue
+
+                if module_name in sys.modules:
+                    # This skips processors/datasources that were loaded by others and may not yet be captured
+                    pass
 
                 # try importing
                 try:
                     module = importlib.import_module(module_name)
-                except ImportError as e:
+                except (SyntaxError, ImportError) as e:
                     # this is fine, just ignore this data source and give a heads up
                     self.ignore.append(module_name)
-                    if e.name not in self.missing_modules:
-                        self.missing_modules[e.name] = [module_name]
+                    key_name = e.name if hasattr(e, "name") else module_name
+                    if key_name not in self.missing_modules:
+                        self.missing_modules[key_name] = [module_name]
                     else:
-                        self.missing_modules[e.name].append(module_name)
+                        self.missing_modules[key_name].append(module_name)
                     continue
 
                 # see if module contains the right type of content by looping
@@ -117,8 +147,10 @@ class ModuleCollector:
                     self.workers[component[1].type] = component[1]
                     self.workers[component[1].type].filepath = relative_path
 
-                    if issubclass(component[1], BasicProcessor):
-                        # maintain a separate cache of processors
+                    # we can't use issubclass() because for that we would need
+                    # to import BasicProcessor, which would lead to a circular
+                    # import
+                    if self.is_4cat_class(component[1], only_processors=True):
                         self.processors[component[1].type] = self.workers[component[1].type]
 
         # sort by category for more convenient display in interfaces
@@ -131,11 +163,13 @@ class ModuleCollector:
 
         # Give a heads-up if not all modules were installed properly
         if self.missing_modules:
-            print_msg = "Warning: Not all modules could be found, which might cause data sources and modules to not function.\nMissing modules:\n"
+            warning = "Warning: Not all modules could be found, which might cause data sources and modules to not " \
+                      "function.\nMissing modules:\n"
             for missing_module, processor_list in self.missing_modules.items():
-                print_msg += "\t%s (for processors %s)\n" % (missing_module, ", ".join(processor_list))
+                warning += "\t%s (for %s)\n" % (missing_module, ", ".join(processor_list))
 
-            print(print_msg, file=sys.stderr)
+            self.log_buffer = warning
+
 
         self.processors = categorised_processors
 
@@ -148,7 +182,7 @@ class ModuleCollector:
         `DATASOURCE` constant. The latter is taken as the ID for this
         datasource.
         """
-        for subdirectory in Path(config.PATH_ROOT, "datasources").iterdir():
+        for subdirectory in Path(config.get('PATH_ROOT'), "datasources").iterdir():
             # folder name, also the name used in config.py
             folder_name = subdirectory.parts[-1]
 
@@ -164,18 +198,13 @@ class ModuleCollector:
 
             datasource_id = datasource.DATASOURCE
 
-            if datasource_id not in config.DATASOURCES:
-                # not configured, so we're going to just ignore it
-                continue
-
             self.datasources[datasource_id] = {
-                "expire-datasets": config.DATASOURCES[datasource_id].get("expire-datasets", None),
+                "expire-datasets": config.get("datasources.expiration", {}).get(datasource_id, None),
                 "path": subdirectory,
                 "name": datasource.NAME if hasattr(datasource, "NAME") else datasource_id,
                 "id": subdirectory.parts[-1],
                 "init": datasource.init_datasource,
-                "is_local": hasattr(datasource, "IS_LOCAL") and datasource.IS_LOCAL,
-                "is_static": hasattr(datasource, "IS_STATIC") and datasource.IS_STATIC
+                "config": {} if not hasattr(datasource, "config") else datasource.config
             }
 
         sorted_datasources = {datasource_id: self.datasources[datasource_id] for datasource_id in
@@ -191,9 +220,11 @@ class ModuleCollector:
         function takes care of populating those values.
         """
         for datasource_id in self.datasources:
-            self.datasources[datasource_id]["has_worker"] = "%s-search" % datasource_id in self.workers
+            worker = self.workers.get("%s-search" % datasource_id)
+            self.datasources[datasource_id]["has_worker"] = bool(worker)
             self.datasources[datasource_id]["has_options"] = self.datasources[datasource_id]["has_worker"] and \
                                                              bool(self.workers["%s-search" % datasource_id].get_options())
+            self.datasources[datasource_id]["importable"] = worker and hasattr(worker, "is_from_extension") and worker.is_from_extension
 
     def load_worker_class(self, worker):
         """

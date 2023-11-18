@@ -9,10 +9,9 @@ import urllib.request
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
-from backend.abstract.processor import BasicProcessor
-from common.lib.helpers import UserInput, get_yt_compatible_ids
-
-import config
+from backend.lib.processor import BasicProcessor
+from common.lib.helpers import UserInput
+from common.config_manager import config
 
 __author__ = "Sal Hagen"
 __credits__ = ["Sal Hagen"]
@@ -32,8 +31,8 @@ class YouTubeMetadata(BasicProcessor):
 
 	type = "youtube-metadata"  # job type ID
 	category = "Post metrics" # category
-	title = "YouTube URL metadata"  # title displayed in UI
-	description = "Extract information from YouTube links to videos and channels"  # description displayed in UI
+	title = "Extract YouTube metadata"  # title displayed in UI
+	description = "Extract information from YouTube videos and channels linked-to in the dataset"  # description displayed in UI
 	extension = "csv"  # extension of result file, used internally and in UI
 
 	max_retries = 3
@@ -51,26 +50,27 @@ class YouTubeMetadata(BasicProcessor):
 		"top": {
 			"type": UserInput.OPTION_TEXT,
 			"default": 100,
-			"help": "Top n most-frequently referenced videos/channels (0 = all)"
+			"help": "Amount of most linked-to videos and channels to include (0 = all)"
 		},
 		"min": {
 			"type": UserInput.OPTION_TEXT,
 			"default": 0,
-			"help": "Times a video/channel must be referenced (0 = all)"
+			"help": "Times a video or channel must be linked-to (0 = all)"
 		},
 		"custom-key": {
 			"type": UserInput.OPTION_TEXT,
 			"default": "",
-			"help": "Optional: A custom YouTube API key. Leave empty for 4CAT's API key."
+			"help": "YouTube API key (optional)",
+			"tooltip": "You can insert your personal API key here. Leave empty to use the API key of the administrators of this 4CAT installation."
 		}
 	}
 
 	@classmethod
-	def is_compatible_with(cls, module=None):
+	def is_compatible_with(cls, module=None, user=None):
 		"""
 		Allow processor on datasets probably containing youtube links
 
-		:param module: Dataset or processor to determine compatibility with
+		:param module: Module to determine compatibility with
 		"""
 		# Compatible with every top-level dataset.
 		return module.is_top_dataset()
@@ -86,7 +86,7 @@ class YouTubeMetadata(BasicProcessor):
 		"""
 
 		# First check if there's a YouTube Developer API key in config
-		if not config.YOUTUBE_DEVELOPER_KEY:
+		if not self.config.get('api.youtube.key'):
 			self.dataset.update_status("No API key found")
 			self.dataset.finish(0)
 			return
@@ -102,7 +102,10 @@ class YouTubeMetadata(BasicProcessor):
 		link_regex = re.compile(r"https?://[^\s]+")
 		www_regex = re.compile(r"^www\.")
 
-		for post in self.iterate_items(self.source_file):
+		for post in self.source_dataset.iterate_items(self):
+
+			if not post:
+				continue
 
 			post_urls = []
 
@@ -266,7 +269,7 @@ class YouTubeMetadata(BasicProcessor):
 
 			# Store data from original post file for cross-referencing
 			metadata["referenced_urls"] = ','.join(youtube_item["urls_referenced"])
-			metadata["referenced_by"] = ','.join(youtube_item["referenced_by"])
+			metadata["referenced_by"] = ','.join([str(n) for n in youtube_item["referenced_by"]])
 			metadata["count"] = youtube_item["count"]
 
 			# Add api data if the request for the item was succesfull
@@ -281,6 +284,7 @@ class YouTubeMetadata(BasicProcessor):
 			# Update status once in a while
 			if counter % 10 == 0:
 				self.dataset.update_status("Extracted metadata " + str(counter) + "/" + str(len(urls_metadata)))
+				self.dataset.update_progress(counter / len(urls_metadata))
 
 		# To write to csv, all dictionary items must have all the possible keys
 		# Get all the possible keys
@@ -403,7 +407,7 @@ class YouTubeMetadata(BasicProcessor):
 
 		"""
 		
-		ids_list = get_yt_compatible_ids(ids)
+		ids_list = self.get_yt_compatible_ids(ids)
 
 		if object_type != "video" and object_type != "channel":
 			return "No valid YouTube object type (currently only 'channel' and 'video' are supported)"
@@ -415,7 +419,7 @@ class YouTubeMetadata(BasicProcessor):
 		if custom_key:
 			api_key = custom_key
 		else:
-			api_key = config.YOUTUBE_DEVELOPER_KEY
+			api_key = self.config.get('api.youtube.key')
 
 		for i, ids_string in enumerate(ids_list):
 
@@ -424,7 +428,7 @@ class YouTubeMetadata(BasicProcessor):
 
 			try:
 				# Use YouTubeDL and the YouTube API to request video data
-				youtube = build(config.YOUTUBE_API_SERVICE_NAME, config.YOUTUBE_API_VERSION,
+				youtube = build(self.config.get('api.youtube.name'), self.config.get('api.youtube.version'),
 												developerKey=api_key)
 			# Catch invalid API keys
 			except HttpError as e:
@@ -545,6 +549,38 @@ class YouTubeMetadata(BasicProcessor):
 			self.dataset.update_status("Got metadata from " + str(i * 50) + "/" + str(len(ids)) + " " + object_type + " YouTube URLs")
 
 		return results
+
+	def get_yt_compatible_ids(self, yt_ids):
+		"""
+		:param yt_ids list, a list of strings
+		:returns list, a ist of joined strings in pairs of 50
+
+		Takes a list of IDs and returns list of joined strings
+		in pairs of fifty. This should be done for the YouTube API
+		that requires a comma-separated string and can only return
+		max fifty results.
+		"""
+
+		# If there's only one item, return a single list item
+		if isinstance(yt_ids, str):
+			return [yt_ids]
+
+		ids = []
+		last_i = 0
+		for i, yt_id in enumerate(yt_ids):
+
+			# Add a joined string per fifty videos
+			if i % 50 == 0 and i != 0:
+				ids_string = ",".join(yt_ids[last_i:i])
+				ids.append(ids_string)
+				last_i = i
+
+			# If the end of the list is reached, add the last data
+			elif i == (len(yt_ids) - 1):
+				ids_string = ",".join(yt_ids[last_i:i])
+				ids.append(ids_string)
+
+		return ids
 
 	def after_process(self):
 		"""

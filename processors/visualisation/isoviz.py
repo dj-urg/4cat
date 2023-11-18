@@ -4,7 +4,7 @@ Generate multiple area graphs and project them isometrically
 import csv
 import re
 
-from backend.abstract.processor import BasicProcessor
+from backend.lib.processor import BasicProcessor
 from common.lib.helpers import UserInput, convert_to_int, pad_interval, get_4cat_canvas
 
 from calendar import month_abbr
@@ -32,7 +32,7 @@ class IsometricMultigraphRenderer(BasicProcessor):
 	type = "render-graphs-isometric"  # job type ID
 	category = "Visual"  # category
 	title = "Side-by-side graphs"  # title displayed in UI
-	description = "Generate area graphs showing prevalence per item over time and project these side-by-side on an isometric plane for easy comparison."  # description displayed in UI
+	description = "Generate area graphs showing prevalence per item over time. These are visualised side-by-side on an isometric plane for easy comparison."  # description displayed in UI
 	extension = "svg"  # extension of result file, used internally and in UI
 
 	options = {
@@ -45,7 +45,7 @@ class IsometricMultigraphRenderer(BasicProcessor):
 			"type": UserInput.OPTION_TOGGLE,
 			"default": True,
 			"help": "Normalise values to 0-100% for each graph",
-			"tooltip": "This allows for easier trend comparison, but note that absolute prevalence is no longer visible when this is enabled."
+			"tooltip": "This allows for easier trend comparison (but absolute counts cannot be compared anymore)."
 		},
 		"top": {
 			"type": UserInput.OPTION_TEXT,
@@ -53,7 +53,7 @@ class IsometricMultigraphRenderer(BasicProcessor):
 			"max": 50,
 			"default": 10,
 			"help": "Cut-off for top list",
-			"tooltip": "Only the most-occuring items are retained. Sorted by total amount of occurences (i.e. all frequencies per item, summed)."
+			"tooltip": "Only the most-occuring items are retained. Sorted by total amount of occurences (i.e. all frequencies per item)."
 		},
 		"complete": {
 			"type": UserInput.OPTION_TEXT,
@@ -75,7 +75,7 @@ class IsometricMultigraphRenderer(BasicProcessor):
 	colour_index = 0
 
 	@classmethod
-	def is_compatible_with(cls, module=None):
+	def is_compatible_with(cls, module=None, user=None):
 		"""
 		Allow processor on rankable items
 
@@ -101,7 +101,7 @@ class IsometricMultigraphRenderer(BasicProcessor):
 		first_date = "9999-99-99"
 		last_date = "0000-00-00"
 
-		for row in self.iterate_items(self.source_file):
+		for row in self.source_dataset.iterate_items(self):
 			if [k for k in row if k.startswith("word_")]:
 				item = " ".join([row[k] for k in row if k.startswith("word_")])
 			else:

@@ -1,17 +1,17 @@
 {% extends "layout.html" %}
 
 {% block body_class %}plain-page frontpage {{ body_class }}{% endblock %}
+{% block breadcrumbs %}{% set navigation.current = "about" %}{% endblock %}
 
 {% block body %}
     <article class="with-aside">
         <section>
-            <h2><span>What is {{ __tool_name }}?</span></h2>
+            <h2><span>What is {{ __user_config("4cat.name") }}?</span></h2>
             <p>This is an instance of the 4CAT Capture and Analysis Toolkit, a software suite that can capture data
                 from a variety of online sources, and analyze the data through analytical processors.</p>
             <p>4CAT is developed by <a href="https://oilab.eu">OILab</a> and the <a
                     href="https://www.digitalmethods.net">Digital Methods Initiative</a> at the University of Amsterdam.
-                For more information, take a look at the <a
-                        href="https://github.com/digitalmethodsinitiative/4cat">GitHub repository</a>.</p>
+                For more information, take a look at the <a href="https://4cat.nl">4CAT website</a>.</p>
             <h2><span>News and updates</span></h2>
             <ol class="news">
                 {% if news %}
@@ -42,7 +42,7 @@
                                             {{ board }}
                                             {% if datasource in stats and board in stats[datasource]["boards"] %}
                                             ({{ stats[datasource]["boards"][board]["posts"]|numberify }} posts
-                                            from {{ stats[datasource]["boards"][board]["first"]|datetime('%d %b %Y') }} to {{ stats[datasource]["boards"][board]["last"]|datetime('%d %b %Y'
+                                            from {{ stats[datasource]["boards"][board]["first"]|datetime('%d %b %Y')|safe }} to {{ stats[datasource]["boards"][board]["last"]|datetime('%d %b %Y'
                                             )
                                             }})
                                             {% endif %}
@@ -58,6 +58,15 @@
                     {% endfor %}
                 {% endif %}
             </ul>
+        {% if importables %}
+            <p><br>The following datasource{% if importables|length != 1 %}s{% endif %} can be captured via <a href="https://github.com/digitalmethodsinitiative/zeeschuimer">Zeeschuimer</a>:</p>
+            <ul>
+            {% for datasource in importables %}
+                <li>{{ importables[datasource].name }}</li>
+            {% endfor %}
+            </ul>
+            <br>
+        {% endif %}
         </aside>
     </article>
 {% endblock %}

@@ -3,18 +3,22 @@ import sys
 import os
 sys.path.insert(0, os.path.abspath(os.path.dirname(__file__)) + "'/../..")
 from common.lib.database import Database
-from common.lib.logger import Logger
 
-import config
-
-log = Logger(output=True)
-db = Database(logger=log, dbname=config.DB_NAME, user=config.DB_USER, password=config.DB_PASSWORD, host=config.DB_HOST, port=config.DB_PORT, appname="4cat-migrate")
+try:
+	import config
+	import logging
+	db = Database(logger=logging, dbname=config.DB_NAME, user=config.DB_USER, password=config.DB_PASSWORD, host=config.DB_HOST, port=config.DB_PORT, appname="4cat-migrate")
+except (SyntaxError, ImportError, AttributeError) as e:
+	from common.config_manager import config
+	from common.lib.logger import Logger
+	log = Logger(output=True)
+	db = Database(logger=log, dbname=config.get('DB_NAME'), user=config.get('DB_USER'), password=config.get('DB_PASSWORD'), host=config.get('DB_HOST'), port=config.get('DB_PORT'), appname="4cat-migrate")
 
 for datasource in ("8kun", "8chan"):
 	print("  Checking for %s database tables... " % datasource, end="")
 
-	test = db.fetchone("SELECT EXISTS ( SELECT FROM information_schema.tables WHERE table_schema = %s AND table_name = %s )", ("public", "posts_%s" % datasource))
-	if not test["exists"]:
+	chan_table = db.fetchone("SELECT EXISTS ( SELECT FROM information_schema.tables WHERE table_schema = %s AND table_name = %s )", ("public", "posts_%s" % datasource))
+	if not chan_table["exists"]:
 		print("not available, nothing to upgrade!")
 		continue
 

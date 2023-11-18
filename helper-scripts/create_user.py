@@ -3,6 +3,7 @@ Create a new 4CAT user and send them a registration e-mail
 """
 import argparse
 import psycopg2
+import json
 import time
 import sys
 import re
@@ -12,7 +13,7 @@ sys.path.insert(0, os.path.abspath(os.path.dirname(__file__)) + "/..")
 
 from common.lib.database import Database
 from common.lib.logger import Logger
-from webtool.lib.user import User
+from common.lib.user import User
 
 log = Logger()
 db = Database(logger=log, appname="create-user")
@@ -33,12 +34,13 @@ if not args.noemail and not re.match(r"[^@]+\@.*?\.[a-zA-Z]+", args.username):
 	sys.exit(1)
 
 try:
-	db.insert("users", data={"name": args.username, "timestamp_token": int(time.time()), "is_admin": args.admin})
+	tags = json.dumps(["admin"]) if args.admin else "[]"
+	db.insert("users", data={"name": args.username, "timestamp_token": int(time.time()), "timestamp_created": int(time.time()), "tags": json.dumps(tags)})
 except psycopg2.IntegrityError:
 	print("Error: User %s already exists." % args.username)
 	sys.exit(1)
 
-user = User.get_by_name(args.username)
+user = User.get_by_name(db, args.username)
 if user is None:
 	print("Warning: User not created properly. No password reset e-mail sent.")
 	sys.exit(1)
